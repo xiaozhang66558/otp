@@ -1,0 +1,22 @@
+# macOS / Python
+.DS_Store
+__pycache__/
+*.pyc
+
+# Runtime logs
+listener.log
+
+# Sensitive runtime state and OTP data
+otp_wps.csv
+otp_data.csv
+otp_latest.csv
+telegram_permissions.json
+telegram_offset.txt
+
+# Local images and profiles
+*.jpg
+*.jpeg
+*.png
+profile*/
+profiles/
+user_data/

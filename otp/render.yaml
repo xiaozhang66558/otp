@@ -1,0 +1,22 @@
+services:
+  - type: worker
+    name: telegram-otp-listener
+    env: docker
+    rootDir: otp
+    dockerfilePath: ./Dockerfile
+    autoDeploy: true
+    disk:
+      name: otp-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        value: -1003885861822
+      - key: EMPLOYEE_TELEGRAM_CHAT_ID
+        value: -1003820328844
+      - key: DATA_DIR
+        value: /var/data
+      - key: SLEEP_SECONDS
+        value: "1"
