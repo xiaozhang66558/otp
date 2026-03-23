@@ -623,6 +623,47 @@ def mark_command_seen(processed_file: str, command_key: str, now_ts: int, keep_l
     save_recent_message_keys(processed_file, {k: v for k, v in entries})
 
 
+def check_and_mark_recent_command_key(
+    processed_file: str,
+    command_key: str,
+    now_ts: int,
+    ttl_seconds: int = 8,
+    keep_last: int = 5000,
+) -> bool:
+    """
+    Atomically checks whether a recent command key is still in cooldown.
+    Returns True if key is still recent and should be skipped.
+    Returns False if key was newly marked and caller may proceed.
+    """
+    try:
+        import fcntl
+
+        lock_path = processed_file + ".lock"
+        os.makedirs(os.path.dirname(os.path.abspath(processed_file)), exist_ok=True)
+        with open(lock_path, "a") as lf:
+            fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
+            try:
+                keys = load_recent_message_keys(processed_file)
+                last_ts = keys.get(command_key)
+                if last_ts is not None and (int(now_ts) - int(last_ts)) <= ttl_seconds:
+                    return True
+
+                keys[command_key] = int(now_ts)
+                entries = sorted(keys.items(), key=lambda kv: kv[1])
+                if len(entries) > keep_last:
+                    entries = entries[-keep_last:]
+                save_recent_message_keys(processed_file, {k: v for k, v in entries})
+                return False
+            finally:
+                fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
+    except Exception as e:
+        print(f"[WARN] recent-command flock lỗi: {e} — dùng check thường", flush=True)
+        if is_recent_command_duplicate(processed_file, command_key, now_ts, ttl_seconds=ttl_seconds):
+            return True
+        mark_command_seen(processed_file, command_key, now_ts, keep_last)
+        return False
+
+
 def clear_recent_command_key(processed_file: str, command_key: str) -> None:
     keys = load_recent_message_keys(processed_file)
     if command_key not in keys:
@@ -2259,14 +2300,12 @@ def main() -> int:
 
                     clear_recent_command_key(args.processed_commands_file, f"permreq:{user_id}")
                     notify_key = f"permresult:{action}:{user_id}"
-                    should_notify_employee_group = not is_recent_command_duplicate(
+                    should_notify_employee_group = not check_and_mark_recent_command_key(
                         args.processed_commands_file,
                         notify_key,
                         int(time.time()),
-                        ttl_seconds=90,
+                        ttl_seconds=300,
                     )
-                    if should_notify_employee_group:
-                        mark_command_seen(args.processed_commands_file, notify_key, int(time.time()))
 
                     if action == "reqok":
                         grant_get_permission_for_user_id(args.permission_file, user_id)
@@ -2544,15 +2583,14 @@ def main() -> int:
                         if user_id:
                             req_key = f"permreq:{user_id}"
                             now_req_ts = int(time.time())
-                            should_notify_admin = not is_recent_command_duplicate(
+                            should_notify_admin = not check_and_mark_recent_command_key(
                                 args.processed_commands_file,
                                 req_key,
                                 now_req_ts,
                                 ttl_seconds=90,
                             )
-                            if should_notify_admin:
-                                mark_command_seen(args.processed_commands_file, req_key, now_req_ts)
 
+                            if should_notify_admin:
                                 req_lines: List[str] = []
                                 req_lines.append("📥 Yêu cầu cấp quyền lấy OTP")
                                 req_lines.append(f"Tên: {full_name}")
