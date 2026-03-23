@@ -30,6 +30,7 @@ import struct
 import string
 import time
 import tempfile
+import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime
@@ -1249,13 +1250,53 @@ def _urlopen_with_ssl_fallback(req: urllib.request.Request, timeout: int = 30) -
         raise
 
 
+class TelegramAPIError(Exception):
+    def __init__(self, method: str, status_code: int, description: str):
+        self.method = method
+        self.status_code = int(status_code)
+        self.description = (description or "").strip()
+        super().__init__(f"Telegram API {method} failed ({self.status_code}): {self.description}")
+
+
 def telegram_api(bot_token: str, method: str, payload: Dict[str, str]) -> Dict:
     url = f"https://api.telegram.org/bot{bot_token}/{method}"
     data = urllib.parse.urlencode(payload).encode("utf-8")
     req = urllib.request.Request(url, data=data, method="POST")
     req.add_header("Content-Type", "application/x-www-form-urlencoded")
-    raw = _urlopen_with_ssl_fallback(req, timeout=40)
-    return json.loads(raw)
+    try:
+        raw = _urlopen_with_ssl_fallback(req, timeout=40)
+        parsed = json.loads(raw)
+        if not parsed.get("ok", False):
+            desc = str(parsed.get("description", "Telegram API error"))
+            code = int(parsed.get("error_code", 400))
+            raise TelegramAPIError(method, code, desc)
+        return parsed
+    except urllib.error.HTTPError as e:
+        body = ""
+        try:
+            body = e.read().decode("utf-8", errors="replace")
+        except Exception:
+            body = ""
+
+        desc = body.strip() or str(e)
+        try:
+            parsed = json.loads(body)
+            desc = str(parsed.get("description", desc))
+        except Exception:
+            pass
+        raise TelegramAPIError(method, int(getattr(e, "code", 0) or 0), desc)
+
+
+def delete_webhook(bot_token: str, drop_pending_updates: bool = False) -> Tuple[bool, str]:
+    try:
+        resp = telegram_api(
+            bot_token,
+            "deleteWebhook",
+            {"drop_pending_updates": "true" if drop_pending_updates else "false"},
+        )
+        return True, str(resp.get("description", "OK"))
+    except Exception as e:
+        return False, str(e)
 
 
 def get_chat_administrators(bot_token: str, chat_id: str) -> List[Dict]:
@@ -2139,6 +2180,7 @@ def main() -> int:
     print(f"☁️ Restore Google Sheet: {'OK' if restore_ok else 'FAIL'} | {restore_msg}")
 
     offset = load_offset(args.offset_file)
+    conflict_409_count = 0
     last_sheet_pull_ts = 0.0
     sheet_pull_interval = max(float(args.sheet_pull_interval_seconds), 10.0)
     print("🤖 Telegram listener đang chạy...")
@@ -2165,9 +2207,23 @@ def main() -> int:
 
         try:
             updates = get_updates(args.bot_token, offset, args.poll_timeout)
+            conflict_409_count = 0
         except Exception as e:
-            print(f"⚠️ Lỗi getUpdates: {e}", flush=True)
-            time.sleep(max(args.sleep_seconds, 1.0))
+            if isinstance(e, TelegramAPIError) and e.status_code == 409:
+                conflict_409_count += 1
+                desc_lower = e.description.lower()
+                print(f"⚠️ Lỗi getUpdates 409: {e.description}", flush=True)
+
+                if "webhook" in desc_lower:
+                    ok_del, msg_del = delete_webhook(args.bot_token, drop_pending_updates=False)
+                    print(f"🧹 deleteWebhook: {'OK' if ok_del else 'FAIL'} | {msg_del}", flush=True)
+
+                backoff = min(30.0, max(args.sleep_seconds, 1.0) * (2 ** min(conflict_409_count, 4)))
+                print(f"⏳ Chờ {backoff:.1f}s rồi thử lại getUpdates", flush=True)
+                time.sleep(backoff)
+            else:
+                print(f"⚠️ Lỗi getUpdates: {e}", flush=True)
+                time.sleep(max(args.sleep_seconds, 1.0))
             if args.once:
                 return 1
             continue
