@@ -19,6 +19,7 @@ Optional:
 import argparse
 import base64
 import csv
+import errno
 import hmac
 import hashlib
 import json
@@ -520,6 +521,45 @@ def check_and_mark_update_processed(processed_file: str, update_id: int, keep_la
             return True
         mark_update_processed(processed_file, update_id, keep_last)
         return False
+
+
+def acquire_singleton_lock(lock_file: str, retry_seconds: float = 2.0):
+    """
+    Ensure only one polling loop is active for a bot token.
+    Uses a blocking non-busy loop so overlap instances wait instead of double-polling.
+    """
+    lock_path = (lock_file or "").strip()
+    if not lock_path:
+        return None
+
+    try:
+        import fcntl
+    except Exception:
+        print("[WARN] Không hỗ trợ fcntl, bỏ qua singleton lock", flush=True)
+        return None
+
+    os.makedirs(os.path.dirname(os.path.abspath(lock_path)), exist_ok=True)
+    lf = open(lock_path, "a+")
+
+    while True:
+        try:
+            fcntl.flock(lf.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            try:
+                lf.seek(0)
+                lf.truncate(0)
+                lf.write(str(os.getpid()))
+                lf.flush()
+                os.fsync(lf.fileno())
+            except Exception:
+                pass
+            print(f"🔒 Singleton lock acquired: {lock_path} (pid={os.getpid()})", flush=True)
+            return lf
+        except OSError as e:
+            if e.errno in (errno.EACCES, errno.EAGAIN):
+                print(f"⏳ Đang chờ lock listener: {lock_path}", flush=True)
+                time.sleep(max(float(retry_seconds), 0.5))
+                continue
+            raise
 
 
 def load_recent_message_keys(processed_file: str) -> Dict[str, int]:
@@ -1975,8 +2015,10 @@ def parse_args():
     parser.add_argument("--processed-messages-file", default=os.environ.get("TELEGRAM_PROCESSED_MESSAGES_FILE", "telegram_processed_messages.json"))
     parser.add_argument("--processed-commands-file", default=os.environ.get("TELEGRAM_PROCESSED_COMMANDS_FILE", "telegram_processed_commands.json"))
     parser.add_argument("--sent-dedupe-file", default=os.environ.get("TELEGRAM_SENT_DEDUPE_FILE", "telegram_sent_dedupe.json"))
+    parser.add_argument("--singleton-lock-file", default=os.environ.get("TELEGRAM_SINGLETON_LOCK_FILE", ""))
     parser.add_argument("--poll-timeout", type=int, default=30)
     parser.add_argument("--sleep-seconds", type=float, default=1.0)
+    parser.add_argument("--sheet-pull-interval-seconds", type=float, default=float(os.environ.get("TELEGRAM_SHEET_PULL_INTERVAL_SECONDS", "120")))
     parser.add_argument("--google-sheet-id", default=os.environ.get("GOOGLE_SHEET_ID", ""))
     parser.add_argument("--google-sheet-name", default=os.environ.get("GOOGLE_SHEET_NAME", "OTP"))
     parser.add_argument("--google-service-account-file", default=os.environ.get("GOOGLE_SERVICE_ACCOUNT_FILE", ""))
@@ -2031,6 +2073,9 @@ def main() -> int:
 
     configure_outbound_dedupe(args.sent_dedupe_file, ttl_seconds=10)
 
+    # Hold process-wide lock to avoid two concurrent pollers causing duplicates.
+    _singleton_lock_handle = acquire_singleton_lock(args.singleton_lock_file)
+
     if not args.bot_token or not args.chat_id or not args.employee_chat_id:
         print("❌ Thiếu TELEGRAM_BOT_TOKEN hoặc chat id của admin/nhân viên")
         return 1
@@ -2046,7 +2091,7 @@ def main() -> int:
 
     offset = load_offset(args.offset_file)
     last_sheet_pull_ts = 0.0
-    sheet_pull_interval = 20.0
+    sheet_pull_interval = max(float(args.sheet_pull_interval_seconds), 10.0)
     print("🤖 Telegram listener đang chạy...")
     print(f"📄 File WPS: {args.wps_file}")
     print(f"📌 Chat admin: {args.chat_id}")
@@ -2316,10 +2361,9 @@ def main() -> int:
             is_employee_chat = message_chat_id == str(args.employee_chat_id)
 
             if message_chat_id and message_id:
-                marker = (text or "[photo]" if msg.get("photo") else "[other]")[:120]
-                message_key = f"{message_chat_id}:{message_id}:{marker}"
+                message_key = f"{message_chat_id}:{message_id}"
                 now_ts = int(time.time())
-                if is_recent_message_duplicate(args.processed_messages_file, message_key, now_ts):
+                if is_recent_message_duplicate(args.processed_messages_file, message_key, now_ts, ttl_seconds=3600):
                     print(f"[SKIP] Tin nhắn trùng gần đây: {message_key}", flush=True)
                     continue
                 mark_message_seen(args.processed_messages_file, message_key, now_ts)
@@ -2328,10 +2372,6 @@ def main() -> int:
                 f"[UPDATE] ID={update_id}, chat_id={message_chat_id}, admin_chat={is_admin_chat}, employee_chat={is_employee_chat}, has_text={bool(text)}, has_photo={bool(msg.get('photo'))}",
                 flush=True,
             )
-            
-            # Debug: In toàn bộ message structure nếu có tin nhắn
-            if msg:
-                print(f"[DEBUG] Full message: {json.dumps(msg, indent=2, default=str)}", flush=True)
 
             if not is_admin_chat and not is_employee_chat:
                 print(f"[SKIP] Chat ID không match, bỏ qua", flush=True)

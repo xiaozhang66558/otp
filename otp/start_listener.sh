@@ -37,4 +37,6 @@ exec python3 -u telegram_otp_listener.py \
   --processed-updates-file "$DATA_DIR/telegram_processed_updates.json" \
   --processed-messages-file "$DATA_DIR/telegram_processed_messages.json" \
   --processed-commands-file "$DATA_DIR/telegram_processed_commands.json" \
+  --singleton-lock-file "$DATA_DIR/telegram_listener.lock" \
+  --sheet-pull-interval-seconds "${TELEGRAM_SHEET_PULL_INTERVAL_SECONDS:-120}" \
   --sent-dedupe-file "$DATA_DIR/telegram_sent_dedupe.json"
