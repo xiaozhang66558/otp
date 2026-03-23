@@ -148,6 +148,120 @@ def save_csv_rows(csv_path: str, fieldnames: List[str], rows: List[Dict[str, str
         writer.writerows(rows)
 
 
+def _load_google_service_account_info(
+    service_account_json: str,
+    service_account_file: str,
+) -> Tuple[Optional[Dict], str]:
+    raw = (service_account_json or "").strip()
+    if raw:
+        try:
+            info = json.loads(raw)
+            if isinstance(info.get("private_key"), str):
+                info["private_key"] = info["private_key"].replace("\\n", "\n")
+            return info, ""
+        except Exception as e:
+            return None, f"GOOGLE_SERVICE_ACCOUNT_JSON không hợp lệ: {e}"
+
+    file_path = (service_account_file or "").strip()
+    if not file_path:
+        return None, "Thiếu service account (GOOGLE_SERVICE_ACCOUNT_JSON hoặc GOOGLE_SERVICE_ACCOUNT_FILE)"
+    if not os.path.exists(file_path):
+        return None, f"Không tìm thấy file service account: {file_path}"
+
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            info = json.load(f)
+        return info, ""
+    except Exception as e:
+        return None, f"Không đọc được service account file: {e}"
+
+
+def sync_csv_to_google_sheet(
+    csv_path: str,
+    spreadsheet_id: str,
+    sheet_name: str,
+    service_account_json: str,
+    service_account_file: str,
+) -> Tuple[bool, str]:
+    if not os.path.exists(csv_path):
+        return False, f"Không tìm thấy file CSV: {csv_path}"
+
+    if not (spreadsheet_id or "").strip():
+        return False, "Thiếu GOOGLE_SHEET_ID"
+
+    account_info, err = _load_google_service_account_info(service_account_json, service_account_file)
+    if not account_info:
+        return False, err
+
+    try:
+        from google.oauth2.service_account import Credentials
+        from googleapiclient.discovery import build
+    except Exception as e:
+        return False, f"Thiếu thư viện Google API: {e}"
+
+    try:
+        with open(csv_path, "r", newline="", encoding="utf-8") as f:
+            reader = csv.reader(f)
+            values = [row for row in reader]
+    except Exception as e:
+        return False, f"Không đọc được CSV để đồng bộ: {e}"
+
+    try:
+        creds = Credentials.from_service_account_info(
+            account_info,
+            scopes=["https://www.googleapis.com/auth/spreadsheets"],
+        )
+        service = build("sheets", "v4", credentials=creds, cache_discovery=False)
+
+        # Ensure sheet exists before writing.
+        meta = service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
+        current_titles = {
+            (s.get("properties") or {}).get("title", "")
+            for s in (meta.get("sheets") or [])
+        }
+        if sheet_name not in current_titles:
+            service.spreadsheets().batchUpdate(
+                spreadsheetId=spreadsheet_id,
+                body={"requests": [{"addSheet": {"properties": {"title": sheet_name}}}]},
+            ).execute()
+
+        service.spreadsheets().values().clear(
+            spreadsheetId=spreadsheet_id,
+            range=f"{sheet_name}!A:Z",
+            body={},
+        ).execute()
+
+        if values:
+            service.spreadsheets().values().update(
+                spreadsheetId=spreadsheet_id,
+                range=f"{sheet_name}!A1",
+                valueInputOption="RAW",
+                body={"values": values},
+            ).execute()
+
+        return True, f"Đã đồng bộ {max(len(values) - 1, 0)} dòng"
+    except Exception as e:
+        return False, f"Lỗi đồng bộ Google Sheets: {e}"
+
+
+def maybe_sync_google_sheet(
+    csv_path: str,
+    spreadsheet_id: str,
+    sheet_name: str,
+    service_account_json: str,
+    service_account_file: str,
+) -> Tuple[bool, str]:
+    if not (spreadsheet_id or "").strip():
+        return True, "Bỏ qua đồng bộ (chưa cấu hình GOOGLE_SHEET_ID)"
+    return sync_csv_to_google_sheet(
+        csv_path,
+        spreadsheet_id,
+        sheet_name,
+        service_account_json,
+        service_account_file,
+    )
+
+
 def load_permissions(permission_file: str) -> Dict[str, Dict[str, Dict[str, str]]]:
     if not os.path.exists(permission_file):
         return {"get": {}, "delete": {}}
@@ -1103,6 +1217,10 @@ def parse_args():
     parser.add_argument("--permission-file", default="telegram_permissions.json")
     parser.add_argument("--poll-timeout", type=int, default=30)
     parser.add_argument("--sleep-seconds", type=float, default=1.0)
+    parser.add_argument("--google-sheet-id", default=os.environ.get("GOOGLE_SHEET_ID", ""))
+    parser.add_argument("--google-sheet-name", default=os.environ.get("GOOGLE_SHEET_NAME", "OTP"))
+    parser.add_argument("--google-service-account-file", default=os.environ.get("GOOGLE_SERVICE_ACCOUNT_FILE", ""))
+    parser.add_argument("--google-service-account-json", default=os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", ""))
     parser.add_argument("--once", action="store_true", help="Run one poll cycle then exit")
     return parser.parse_args()
 
@@ -1119,6 +1237,10 @@ def main() -> int:
     print(f"📄 File WPS: {args.wps_file}")
     print(f"📌 Chat admin: {args.chat_id}")
     print(f"📌 Chat nhân viên: {args.employee_chat_id}")
+    if args.google_sheet_id:
+        print(f"☁️ Google Sheet: {args.google_sheet_id} | tab={args.google_sheet_name}")
+    else:
+        print("☁️ Google Sheet: chưa cấu hình (bỏ qua đồng bộ)")
 
     while True:
         try:
@@ -1259,6 +1381,15 @@ def main() -> int:
             if is_admin_chat and msg.get("photo"):
                 print(f"[MAIN] Nhận tin nhắn ảnh từ {message_chat_id}")
                 report_text, ok = process_qr_photo(args.bot_token, msg, args.wps_file)
+                if ok:
+                    sync_ok, sync_msg = maybe_sync_google_sheet(
+                        args.wps_file,
+                        args.google_sheet_id,
+                        args.google_sheet_name,
+                        args.google_service_account_json,
+                        args.google_service_account_file,
+                    )
+                    report_text = f"{report_text}\n\n☁️ Google Sheets: {'✅ ' if sync_ok else '❌ '}{sync_msg}"
                 print(f"[MAIN] Sắp gửi Telegram: {report_text[:50]}...")
                 send_message(args.bot_token, message_chat_id, report_text)
                 if ok:
@@ -1343,6 +1474,15 @@ def main() -> int:
 
             if is_admin_chat and text.startswith("/addotp"):
                 report_text, ok = process_addotp(text, args.wps_file)
+                if ok:
+                    sync_ok, sync_msg = maybe_sync_google_sheet(
+                        args.wps_file,
+                        args.google_sheet_id,
+                        args.google_sheet_name,
+                        args.google_service_account_json,
+                        args.google_service_account_file,
+                    )
+                    report_text = f"{report_text}\n\n☁️ Google Sheets: {'✅ ' if sync_ok else '❌ '}{sync_msg}"
                 send_message(args.bot_token, message_chat_id, report_text)
                 if ok:
                     caption = f"Cập nhật OTP lúc {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
@@ -1351,6 +1491,15 @@ def main() -> int:
 
             if is_admin_chat and text.startswith("/c"):
                 report_text, ok = process_change_account_name(text, args.wps_file)
+                if ok:
+                    sync_ok, sync_msg = maybe_sync_google_sheet(
+                        args.wps_file,
+                        args.google_sheet_id,
+                        args.google_sheet_name,
+                        args.google_service_account_json,
+                        args.google_service_account_file,
+                    )
+                    report_text = f"{report_text}\n\n☁️ Google Sheets: {'✅ ' if sync_ok else '❌ '}{sync_msg}"
                 send_message(args.bot_token, message_chat_id, report_text)
                 if ok:
                     caption = f"Đổi tên OTP lúc {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
@@ -1364,6 +1513,15 @@ def main() -> int:
                     send_message(args.bot_token, message_chat_id, "❌ Bạn chưa được cấp quyền xoá OTP")
                     continue
                 report_text, ok = process_delotp(text, args.wps_file)
+                if ok:
+                    sync_ok, sync_msg = maybe_sync_google_sheet(
+                        args.wps_file,
+                        args.google_sheet_id,
+                        args.google_sheet_name,
+                        args.google_service_account_json,
+                        args.google_service_account_file,
+                    )
+                    report_text = f"{report_text}\n\n☁️ Google Sheets: {'✅ ' if sync_ok else '❌ '}{sync_msg}"
                 send_message(args.bot_token, message_chat_id, report_text)
                 if ok:
                     caption = f"Đã xoá OTP lúc {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
