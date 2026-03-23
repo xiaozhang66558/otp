@@ -36,4 +36,5 @@ exec python3 -u telegram_otp_listener.py \
   --pending-file "$DATA_DIR/telegram_qr_pending.json" \
   --processed-updates-file "$DATA_DIR/telegram_processed_updates.json" \
   --processed-messages-file "$DATA_DIR/telegram_processed_messages.json" \
-  --processed-commands-file "$DATA_DIR/telegram_processed_commands.json"
+  --processed-commands-file "$DATA_DIR/telegram_processed_commands.json" \
+  --sent-dedupe-file "$DATA_DIR/telegram_sent_dedupe.json"

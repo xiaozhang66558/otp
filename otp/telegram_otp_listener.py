@@ -35,6 +35,27 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 
+OUTBOUND_DEDUPE_FILE = ""
+OUTBOUND_DEDUPE_TTL_SECONDS = 10
+
+
+def configure_outbound_dedupe(file_path: str, ttl_seconds: int = 10) -> None:
+    global OUTBOUND_DEDUPE_FILE, OUTBOUND_DEDUPE_TTL_SECONDS
+    OUTBOUND_DEDUPE_FILE = (file_path or "").strip()
+    OUTBOUND_DEDUPE_TTL_SECONDS = max(int(ttl_seconds), 1)
+
+
+def should_send_outbound(dedupe_key: str) -> bool:
+    if not OUTBOUND_DEDUPE_FILE:
+        return True
+    now_ts = int(time.time())
+    if is_recent_command_duplicate(OUTBOUND_DEDUPE_FILE, dedupe_key, now_ts, OUTBOUND_DEDUPE_TTL_SECONDS):
+        print(f"[SKIP] Outbound duplicate blocked: {dedupe_key[:120]}", flush=True)
+        return False
+    mark_command_seen(OUTBOUND_DEDUPE_FILE, dedupe_key, now_ts)
+    return True
+
+
 def load_otp_modules():
     try:
         import cv2
@@ -1169,6 +1190,12 @@ def send_message(
     text: str,
     reply_markup: Optional[Dict] = None,
 ) -> bool:
+    markup_key = json.dumps(reply_markup, ensure_ascii=False, sort_keys=True) if reply_markup else ""
+    text_hash = hashlib.sha1(((text or "") + "|" + markup_key).encode("utf-8")).hexdigest()
+    dedupe_key = f"sendMessage:{chat_id}:{text_hash}"
+    if not should_send_outbound(dedupe_key):
+        return True
+
     payload = {"chat_id": chat_id, "text": text}
     if reply_markup:
         payload["reply_markup"] = json.dumps(reply_markup, ensure_ascii=False)
@@ -1213,13 +1240,23 @@ def send_document(bot_token: str, chat_id: str, file_path: str, caption: str) ->
     if not os.path.exists(file_path):
         return False
 
+    filename = os.path.basename(file_path)
+    try:
+        stat = os.stat(file_path)
+        file_sig = f"{filename}:{stat.st_size}:{int(stat.st_mtime)}"
+    except Exception:
+        file_sig = filename
+    dedupe_hash = hashlib.sha1((caption + "|" + file_sig).encode("utf-8")).hexdigest()
+    dedupe_key = f"sendDocument:{chat_id}:{dedupe_hash}"
+    if not should_send_outbound(dedupe_key):
+        return True
+
     url = f"https://api.telegram.org/bot{bot_token}/sendDocument"
     boundary = "----otplistener" + "".join(random.choice(string.ascii_letters) for _ in range(16))
 
     with open(file_path, "rb") as f:
         file_data = f.read()
 
-    filename = os.path.basename(file_path)
     parts: List[bytes] = []
 
     def add_text_part(name: str, value: str) -> None:
@@ -1899,6 +1936,7 @@ def parse_args():
     parser.add_argument("--processed-updates-file", default=os.environ.get("TELEGRAM_PROCESSED_UPDATES_FILE", "telegram_processed_updates.json"))
     parser.add_argument("--processed-messages-file", default=os.environ.get("TELEGRAM_PROCESSED_MESSAGES_FILE", "telegram_processed_messages.json"))
     parser.add_argument("--processed-commands-file", default=os.environ.get("TELEGRAM_PROCESSED_COMMANDS_FILE", "telegram_processed_commands.json"))
+    parser.add_argument("--sent-dedupe-file", default=os.environ.get("TELEGRAM_SENT_DEDUPE_FILE", "telegram_sent_dedupe.json"))
     parser.add_argument("--poll-timeout", type=int, default=30)
     parser.add_argument("--sleep-seconds", type=float, default=1.0)
     parser.add_argument("--google-sheet-id", default=os.environ.get("GOOGLE_SHEET_ID", ""))
@@ -1913,13 +1951,23 @@ def send_photo(bot_token: str, chat_id: str, file_path: str, caption: str = "") 
     if not os.path.exists(file_path):
         return False
 
+    filename = os.path.basename(file_path)
+    try:
+        stat = os.stat(file_path)
+        file_sig = f"{filename}:{stat.st_size}:{int(stat.st_mtime)}"
+    except Exception:
+        file_sig = filename
+    dedupe_hash = hashlib.sha1((caption + "|" + file_sig).encode("utf-8")).hexdigest()
+    dedupe_key = f"sendPhoto:{chat_id}:{dedupe_hash}"
+    if not should_send_outbound(dedupe_key):
+        return True
+
     url = f"https://api.telegram.org/bot{bot_token}/sendPhoto"
     boundary = "----otpphoto" + "".join(random.choice(string.ascii_letters) for _ in range(16))
 
     with open(file_path, "rb") as f:
         file_data = f.read()
 
-    filename = os.path.basename(file_path)
     parts: List[bytes] = []
 
     def add_text_part(name: str, value: str) -> None:
@@ -1952,6 +2000,8 @@ def send_photo(bot_token: str, chat_id: str, file_path: str, caption: str = "") 
 
 def main() -> int:
     args = parse_args()
+
+    configure_outbound_dedupe(args.sent_dedupe_file, ttl_seconds=10)
 
     if not args.bot_token or not args.chat_id or not args.employee_chat_id:
         print("❌ Thiếu TELEGRAM_BOT_TOKEN hoặc chat id của admin/nhân viên")
