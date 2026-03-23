@@ -341,6 +341,42 @@ def restore_csv_from_google_sheet_if_newer(
     return True, f"Đã restore {len(rebuilt_rows)} dòng từ Google Sheet"
 
 
+def force_restore_csv_from_google_sheet(
+    csv_path: str,
+    spreadsheet_id: str,
+    sheet_name: str,
+    service_account_json: str,
+    service_account_file: str,
+) -> Tuple[bool, str]:
+    if not (spreadsheet_id or "").strip():
+        return True, "Bỏ qua restore (chưa cấu hình GOOGLE_SHEET_ID)"
+
+    ok, values, err = load_sheet_rows(
+        spreadsheet_id,
+        sheet_name,
+        service_account_json,
+        service_account_file,
+    )
+    if not ok:
+        return False, err
+    if not values:
+        return True, "Google Sheet đang trống"
+
+    header = [str(col).strip() for col in values[0]]
+    if not header:
+        return False, "Google Sheet không có header hợp lệ"
+
+    width = len(header)
+    rebuilt_rows: List[Dict[str, str]] = []
+    for raw_row in values[1:]:
+        padded = list(raw_row) + [""] * (width - len(raw_row))
+        rebuilt_rows.append({header[idx]: str(padded[idx]) for idx in range(width)})
+
+    os.makedirs(os.path.dirname(csv_path) or ".", exist_ok=True)
+    save_csv_rows(csv_path, header, rebuilt_rows)
+    return True, f"Đã nạp {len(rebuilt_rows)} dòng từ Google Sheet"
+
+
 def load_permissions(permission_file: str) -> Dict[str, Dict[str, Dict[str, str]]]:
     if not os.path.exists(permission_file):
         return {"get": {}, "delete": {}}
@@ -1457,6 +1493,8 @@ def main() -> int:
     print(f"☁️ Restore Google Sheet: {'OK' if restore_ok else 'FAIL'} | {restore_msg}")
 
     offset = load_offset(args.offset_file)
+    last_sheet_pull_ts = 0.0
+    sheet_pull_interval = 20.0
     print("🤖 Telegram listener đang chạy...")
     print(f"📄 File WPS: {args.wps_file}")
     print(f"📌 Chat admin: {args.chat_id}")
@@ -1467,6 +1505,18 @@ def main() -> int:
         print("☁️ Google Sheet: chưa cấu hình (bỏ qua đồng bộ)")
 
     while True:
+        now_ts = time.time()
+        if args.google_sheet_id and now_ts - last_sheet_pull_ts >= sheet_pull_interval:
+            pull_ok, pull_msg = restore_csv_from_google_sheet_if_newer(
+                args.wps_file,
+                args.google_sheet_id,
+                args.google_sheet_name,
+                args.google_service_account_json,
+                args.google_service_account_file,
+            )
+            print(f"☁️ Pull Google Sheet: {'OK' if pull_ok else 'FAIL'} | {pull_msg}", flush=True)
+            last_sheet_pull_ts = now_ts
+
         try:
             updates = get_updates(args.bot_token, offset, args.poll_timeout)
         except Exception as e:
@@ -1604,6 +1654,15 @@ def main() -> int:
             # Nhóm admin: xử lý ảnh QR trước tiên
             if is_admin_chat and msg.get("photo"):
                 print(f"[MAIN] Nhận tin nhắn ảnh từ {message_chat_id}")
+                if args.google_sheet_id:
+                    restore_ok, restore_msg = force_restore_csv_from_google_sheet(
+                        args.wps_file,
+                        args.google_sheet_id,
+                        args.google_sheet_name,
+                        args.google_service_account_json,
+                        args.google_service_account_file,
+                    )
+                    print(f"☁️ Pre-write restore: {'OK' if restore_ok else 'FAIL'} | {restore_msg}", flush=True)
                 report_text, ok, duplicate_names = process_qr_photo(args.bot_token, msg, args.wps_file)
                 if ok and duplicate_names:
                     pending_count = remember_qr_duplicate_names(
@@ -1637,6 +1696,15 @@ def main() -> int:
                 continue
 
             if is_admin_chat and text.startswith("/renqr"):
+                if args.google_sheet_id:
+                    restore_ok, restore_msg = force_restore_csv_from_google_sheet(
+                        args.wps_file,
+                        args.google_sheet_id,
+                        args.google_sheet_name,
+                        args.google_service_account_json,
+                        args.google_service_account_file,
+                    )
+                    print(f"☁️ Pre-write restore: {'OK' if restore_ok else 'FAIL'} | {restore_msg}", flush=True)
                 report_text, ok = process_rename_qr_duplicate(
                     text,
                     args.wps_file,
@@ -1735,6 +1803,15 @@ def main() -> int:
                 continue
 
             if is_admin_chat and text.startswith("/addotp"):
+                if args.google_sheet_id:
+                    restore_ok, restore_msg = force_restore_csv_from_google_sheet(
+                        args.wps_file,
+                        args.google_sheet_id,
+                        args.google_sheet_name,
+                        args.google_service_account_json,
+                        args.google_service_account_file,
+                    )
+                    print(f"☁️ Pre-write restore: {'OK' if restore_ok else 'FAIL'} | {restore_msg}", flush=True)
                 report_text, ok = process_addotp(text, args.wps_file)
                 if ok:
                     sync_ok, sync_msg = maybe_sync_google_sheet(
@@ -1752,6 +1829,15 @@ def main() -> int:
                 continue
 
             if is_admin_chat and text.startswith("/c"):
+                if args.google_sheet_id:
+                    restore_ok, restore_msg = force_restore_csv_from_google_sheet(
+                        args.wps_file,
+                        args.google_sheet_id,
+                        args.google_sheet_name,
+                        args.google_service_account_json,
+                        args.google_service_account_file,
+                    )
+                    print(f"☁️ Pre-write restore: {'OK' if restore_ok else 'FAIL'} | {restore_msg}", flush=True)
                 report_text, ok = process_change_account_name(text, args.wps_file)
                 if ok:
                     sync_ok, sync_msg = maybe_sync_google_sheet(
@@ -1774,6 +1860,15 @@ def main() -> int:
                 if not is_admin_user and not user_has_permission(permission_data, "delete", user):
                     send_message(args.bot_token, message_chat_id, "❌ Bạn chưa được cấp quyền xoá OTP")
                     continue
+                if args.google_sheet_id:
+                    restore_ok, restore_msg = force_restore_csv_from_google_sheet(
+                        args.wps_file,
+                        args.google_sheet_id,
+                        args.google_sheet_name,
+                        args.google_service_account_json,
+                        args.google_service_account_file,
+                    )
+                    print(f"☁️ Pre-write restore: {'OK' if restore_ok else 'FAIL'} | {restore_msg}", flush=True)
                 report_text, ok = process_delotp(text, args.wps_file)
                 if ok:
                     sync_ok, sync_msg = maybe_sync_google_sheet(
