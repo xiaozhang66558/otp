@@ -960,6 +960,40 @@ def parse_addotp_records(text: str) -> Tuple[List[Dict[str, str]], List[str]]:
     return records, errors
 
 
+def parse_otpauth_uri(qr_data: str) -> Optional[Dict[str, str]]:
+    uri = (qr_data or "").strip()
+    if not uri.lower().startswith("otpauth://"):
+        return None
+
+    parsed = urllib.parse.urlparse(uri)
+    otp_type = (parsed.netloc or "").strip().lower()
+    if otp_type not in {"totp", "hotp"}:
+        return None
+
+    label = urllib.parse.unquote((parsed.path or "").lstrip("/")).strip()
+    qs = urllib.parse.parse_qs(parsed.query or "", keep_blank_values=False)
+
+    secret = (qs.get("secret", [""])[0] or "").strip().replace(" ", "").replace("-", "").upper()
+    if not secret:
+        return None
+
+    issuer_q = (qs.get("issuer", [""])[0] or "").strip()
+    issuer_from_label = ""
+    account = label
+    if ":" in label:
+        issuer_from_label, account = [p.strip() for p in label.split(":", 1)]
+    issuer = issuer_q or issuer_from_label
+    account = account.strip() or label or "OTP"
+
+    key = stable_key(account, issuer, secret)
+    return {
+        "account": account,
+        "issuer": issuer,
+        "secret": secret,
+        "key": key,
+    }
+
+
 def extract_otps_from_qr_image(image_path: str) -> List[Dict[str, str]]:
     cv2, decode, otp_pb2 = load_otp_modules()
 
@@ -967,16 +1001,67 @@ def extract_otps_from_qr_image(image_path: str) -> List[Dict[str, str]]:
     if img is None:
         return []
 
-    decoded_objs = decode(img)
-    if not decoded_objs:
+    qr_texts: List[str] = []
+    seen_qr_texts: Set[str] = set()
+
+    def _collect_qr_text(raw_text: str) -> None:
+        text_norm = (raw_text or "").strip()
+        if not text_norm:
+            return
+        if text_norm in seen_qr_texts:
+            return
+        seen_qr_texts.add(text_norm)
+        qr_texts.append(text_norm)
+
+    # First pass with pyzbar on several image variants.
+    variants = [img]
+    try:
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        variants.append(gray)
+        variants.append(cv2.GaussianBlur(gray, (3, 3), 0))
+        variants.append(cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 31, 2))
+        h, w = gray.shape[:2]
+        if h > 0 and w > 0:
+            variants.append(cv2.resize(gray, (w * 2, h * 2), interpolation=cv2.INTER_CUBIC))
+    except Exception:
+        pass
+
+    for variant in variants:
+        try:
+            decoded_objs = decode(variant)
+        except Exception:
+            decoded_objs = []
+        for obj in decoded_objs:
+            try:
+                _collect_qr_text(obj.data.decode("utf-8", errors="replace"))
+            except Exception:
+                continue
+
+    # Second pass with OpenCV detector as fallback.
+    try:
+        detector = cv2.QRCodeDetector()
+        ok_multi, decoded_multi, _, _ = detector.detectAndDecodeMulti(img)
+        if ok_multi and decoded_multi:
+            for item in decoded_multi:
+                _collect_qr_text(item)
+        else:
+            decoded_single, _, _ = detector.detectAndDecode(img)
+            _collect_qr_text(decoded_single)
+    except Exception:
+        pass
+
+    if not qr_texts:
         return []
 
     otp_list: List[Dict[str, str]] = []
     seen: Set[str] = set()
 
-    for obj in decoded_objs:
-        qr_data = obj.data.decode("utf-8", errors="replace")
+    for qr_data in qr_texts:
         if "otpauth-migration://" not in qr_data or "data=" not in qr_data:
+            parsed_plain = parse_otpauth_uri(qr_data)
+            if parsed_plain and parsed_plain["key"] not in seen:
+                seen.add(parsed_plain["key"])
+                otp_list.append(parsed_plain)
             continue
 
         try:
@@ -1738,7 +1823,7 @@ def process_qr_photo(bot_token: str, msg: Dict, csv_path: str) -> Tuple[str, boo
         otp_rows = extract_otps_from_qr_image(tmp_path)
         print(f"[QR_PHOTO] Giải mã xong, tìm thấy {len(otp_rows)} OTP")
         if not otp_rows:
-            return "❌ Ảnh không có QR OTP hợp lệ", False, []
+            return "❌ Ảnh không có QR OTP hợp lệ (hỗ trợ otpauth-migration và otpauth://totp)", False, []
 
         existing_keys = load_existing_keys(csv_path)
         existing_names = load_existing_account_names(csv_path)
