@@ -427,6 +427,47 @@ def save_pending_qr_renames(pending_file: str, data: Dict[str, Dict[str, Any]]) 
         json.dump(data, f, ensure_ascii=False, indent=2, sort_keys=True)
 
 
+def load_processed_update_ids(processed_file: str) -> List[int]:
+    if not os.path.exists(processed_file):
+        return []
+    try:
+        with open(processed_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            return []
+        values = data.get("ids")
+        if not isinstance(values, list):
+            return []
+        out: List[int] = []
+        for item in values:
+            try:
+                out.append(int(item))
+            except Exception:
+                continue
+        return out
+    except Exception:
+        return []
+
+
+def save_processed_update_ids(processed_file: str, ids: List[int]) -> None:
+    with open(processed_file, "w", encoding="utf-8") as f:
+        json.dump({"ids": ids}, f, ensure_ascii=False, indent=2)
+
+
+def is_update_already_processed(processed_file: str, update_id: int) -> bool:
+    ids = load_processed_update_ids(processed_file)
+    return int(update_id) in set(ids)
+
+
+def mark_update_processed(processed_file: str, update_id: int, keep_last: int = 5000) -> None:
+    ids = load_processed_update_ids(processed_file)
+    ids.append(int(update_id))
+    # Keep only newest IDs to bound file size.
+    if len(ids) > keep_last:
+        ids = ids[-keep_last:]
+    save_processed_update_ids(processed_file, ids)
+
+
 def remember_qr_duplicate_names(
     pending_file: str,
     chat_id: str,
@@ -1129,12 +1170,12 @@ def process_addotp(text: str, csv_path: str) -> Tuple[str, bool]:
     for rec in records:
         account_cell = build_account_cell(rec.get("account", ""), rec.get("issuer", "")).strip()
         account_key = account_cell.lower()
+        if rec["key"] in existing_keys:
+            duplicates.append(rec)
+            continue
         if account_key in existing_names:
             rec["account_cell"] = account_cell
             duplicate_names.append(rec)
-            continue
-        if rec["key"] in existing_keys:
-            duplicates.append(rec)
         else:
             new_rows.append(rec)
             existing_keys.add(rec["key"])
@@ -1630,11 +1671,11 @@ def process_qr_photo(bot_token: str, msg: Dict, csv_path: str) -> Tuple[str, boo
             rec["index"] = str(idx)
             account_cell = build_account_cell(rec.get("account", ""), rec.get("issuer", "")).strip()
             account_key = account_cell.lower()
-            if account_key in existing_names:
+            if rec["key"] in existing_keys:
+                duplicates.append(rec)
+            elif account_key in existing_names:
                 rec["account_cell"] = account_cell
                 duplicate_names.append(rec)
-            elif rec["key"] in existing_keys:
-                duplicates.append(rec)
             else:
                 new_rows.append(rec)
                 existing_keys.add(rec["key"])
@@ -1691,6 +1732,7 @@ def parse_args():
     parser.add_argument("--offset-file", default="telegram_offset.txt")
     parser.add_argument("--permission-file", default="telegram_permissions.json")
     parser.add_argument("--pending-file", default=os.environ.get("TELEGRAM_QR_PENDING_FILE", "telegram_qr_pending.json"))
+    parser.add_argument("--processed-updates-file", default=os.environ.get("TELEGRAM_PROCESSED_UPDATES_FILE", "telegram_processed_updates.json"))
     parser.add_argument("--poll-timeout", type=int, default=30)
     parser.add_argument("--sleep-seconds", type=float, default=1.0)
     parser.add_argument("--google-sheet-id", default=os.environ.get("GOOGLE_SHEET_ID", ""))
@@ -1802,6 +1844,15 @@ def main() -> int:
         for upd in updates:
             update_id = upd.get("update_id", 0)
             offset = max(offset, update_id + 1)
+
+            if is_update_already_processed(args.processed_updates_file, int(update_id)):
+                print(f"[SKIP] Update đã xử lý trước đó: {update_id}", flush=True)
+                save_offset(args.offset_file, offset)
+                continue
+
+            # Mark+saving offset early prevents duplicate replies when service restarts/redeploys.
+            mark_update_processed(args.processed_updates_file, int(update_id))
+            save_offset(args.offset_file, offset)
 
             callback_query = upd.get("callback_query") or {}
             if callback_query:

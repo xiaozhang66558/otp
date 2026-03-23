@@ -33,4 +33,5 @@ exec python3 -u telegram_otp_listener.py \
   --wps-file "$DATA_DIR/otp_wps.csv" \
   --offset-file "$DATA_DIR/telegram_offset.txt" \
   --permission-file "$DATA_DIR/telegram_permissions.json" \
-  --pending-file "$DATA_DIR/telegram_qr_pending.json"
+  --pending-file "$DATA_DIR/telegram_qr_pending.json" \
+  --processed-updates-file "$DATA_DIR/telegram_processed_updates.json"
