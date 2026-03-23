@@ -2425,10 +2425,14 @@ def main() -> int:
             if message_chat_id and message_id:
                 message_key = f"{message_chat_id}:{message_id}"
                 now_ts = int(time.time())
-                if is_recent_message_duplicate(args.processed_messages_file, message_key, now_ts, ttl_seconds=3600):
+                if check_and_mark_recent_command_key(
+                    args.processed_messages_file,
+                    message_key,
+                    now_ts,
+                    ttl_seconds=3600,
+                ):
                     print(f"[SKIP] Tin nhắn trùng gần đây: {message_key}", flush=True)
                     continue
-                mark_message_seen(args.processed_messages_file, message_key, now_ts)
 
             print(
                 f"[UPDATE] ID={update_id}, chat_id={message_chat_id}, admin_chat={is_admin_chat}, employee_chat={is_employee_chat}, has_text={bool(text)}, has_photo={bool(msg.get('photo'))}",
@@ -2572,6 +2576,16 @@ def main() -> int:
                 continue
 
             if text.startswith("/myid"):
+                myid_key = f"myid:{message_chat_id}:{message_id}"
+                if check_and_mark_recent_command_key(
+                    args.processed_commands_file,
+                    myid_key,
+                    int(time.time()),
+                    ttl_seconds=86400,
+                ):
+                    print(f"[SKIP] /myid đã xử lý: {myid_key}", flush=True)
+                    continue
+
                 send_message(args.bot_token, message_chat_id, build_myid_message(user, args.permission_file))
 
                 if is_employee_chat:
