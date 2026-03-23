@@ -512,6 +512,23 @@ def mark_message_seen(processed_file: str, message_key: str, now_ts: int, keep_l
     save_recent_message_keys(processed_file, trimmed)
 
 
+def is_recent_command_duplicate(processed_file: str, command_key: str, now_ts: int, ttl_seconds: int = 8) -> bool:
+    keys = load_recent_message_keys(processed_file)
+    last_ts = keys.get(command_key)
+    if last_ts is None:
+        return False
+    return (now_ts - int(last_ts)) <= ttl_seconds
+
+
+def mark_command_seen(processed_file: str, command_key: str, now_ts: int, keep_last: int = 5000) -> None:
+    keys = load_recent_message_keys(processed_file)
+    keys[command_key] = int(now_ts)
+    entries = sorted(keys.items(), key=lambda kv: kv[1])
+    if len(entries) > keep_last:
+        entries = entries[-keep_last:]
+    save_recent_message_keys(processed_file, {k: v for k, v in entries})
+
+
 def remember_qr_duplicate_names(
     pending_file: str,
     chat_id: str,
@@ -1796,6 +1813,7 @@ def parse_args():
     parser.add_argument("--pending-file", default=os.environ.get("TELEGRAM_QR_PENDING_FILE", "telegram_qr_pending.json"))
     parser.add_argument("--processed-updates-file", default=os.environ.get("TELEGRAM_PROCESSED_UPDATES_FILE", "telegram_processed_updates.json"))
     parser.add_argument("--processed-messages-file", default=os.environ.get("TELEGRAM_PROCESSED_MESSAGES_FILE", "telegram_processed_messages.json"))
+    parser.add_argument("--processed-commands-file", default=os.environ.get("TELEGRAM_PROCESSED_COMMANDS_FILE", "telegram_processed_commands.json"))
     parser.add_argument("--poll-timeout", type=int, default=30)
     parser.add_argument("--sleep-seconds", type=float, default=1.0)
     parser.add_argument("--google-sheet-id", default=os.environ.get("GOOGLE_SHEET_ID", ""))
@@ -2032,7 +2050,7 @@ def main() -> int:
                             callback_message_id,
                             callback_text + "\n\n" + result_text,
                         )
-                        send_message(
+                        sent_group = send_message(
                             args.bot_token,
                             str(args.employee_chat_id),
                             "✅ Kết quả duyệt quyền OTP\n"
@@ -2040,6 +2058,14 @@ def main() -> int:
                             "- Trạng thái: Đã chấp thuận\n"
                             "Bạn có thể dùng /getotp ngay.",
                         )
+                        # Try DM as well; may fail if user has not started bot.
+                        send_message(
+                            args.bot_token,
+                            user_id,
+                            "✅ Yêu cầu quyền OTP của bạn đã được chấp thuận.",
+                        )
+                        if not sent_group:
+                            send_message(args.bot_token, callback_chat_id, "⚠️ Không gửi được thông báo sang nhóm nhân viên")
                         answer_callback_query(args.bot_token, callback_id, "Đã chấp thuận")
                     else:
                         result_text = f"❌ Đã từ chối yêu cầu quyền của user_id {user_id}"
@@ -2049,7 +2075,7 @@ def main() -> int:
                             callback_message_id,
                             callback_text + "\n\n" + result_text,
                         )
-                        send_message(
+                        sent_group = send_message(
                             args.bot_token,
                             str(args.employee_chat_id),
                             "❌ Kết quả duyệt quyền OTP\n"
@@ -2057,6 +2083,13 @@ def main() -> int:
                             "- Trạng thái: Từ chối\n"
                             "Liên hệ admin nếu cần mở quyền.",
                         )
+                        send_message(
+                            args.bot_token,
+                            user_id,
+                            "❌ Yêu cầu quyền OTP của bạn đã bị từ chối.",
+                        )
+                        if not sent_group:
+                            send_message(args.bot_token, callback_chat_id, "⚠️ Không gửi được thông báo sang nhóm nhân viên")
                         answer_callback_query(args.bot_token, callback_id, "Đã từ chối")
                     continue
 
@@ -2221,6 +2254,14 @@ def main() -> int:
             # Kiểm tra tin nhắn text
             if not text:
                 continue
+
+            # Command-level dedupe: suppress duplicate handling for same user+text burst.
+            cmd_key = f"{message_chat_id}:{str(user.get('id', '')).strip()}:{text[:200]}"
+            now_cmd_ts = int(time.time())
+            if is_recent_command_duplicate(args.processed_commands_file, cmd_key, now_cmd_ts):
+                print(f"[SKIP] Lệnh trùng gần đây: {cmd_key}", flush=True)
+                continue
+            mark_command_seen(args.processed_commands_file, cmd_key, now_cmd_ts)
 
             print(f"[MAIN] Nhận tin nhắn text từ {message_chat_id}: {text[:40]}...")
 
