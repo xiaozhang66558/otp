@@ -2032,6 +2032,14 @@ def main() -> int:
                             callback_message_id,
                             callback_text + "\n\n" + result_text,
                         )
+                        send_message(
+                            args.bot_token,
+                            str(args.employee_chat_id),
+                            "✅ Kết quả duyệt quyền OTP\n"
+                            f"- User ID: {user_id}\n"
+                            "- Trạng thái: Đã chấp thuận\n"
+                            "Bạn có thể dùng /getotp ngay.",
+                        )
                         answer_callback_query(args.bot_token, callback_id, "Đã chấp thuận")
                     else:
                         result_text = f"❌ Đã từ chối yêu cầu quyền của user_id {user_id}"
@@ -2040,6 +2048,14 @@ def main() -> int:
                             callback_chat_id,
                             callback_message_id,
                             callback_text + "\n\n" + result_text,
+                        )
+                        send_message(
+                            args.bot_token,
+                            str(args.employee_chat_id),
+                            "❌ Kết quả duyệt quyền OTP\n"
+                            f"- User ID: {user_id}\n"
+                            "- Trạng thái: Từ chối\n"
+                            "Liên hệ admin nếu cần mở quyền.",
                         )
                         answer_callback_query(args.bot_token, callback_id, "Đã từ chối")
                     continue
