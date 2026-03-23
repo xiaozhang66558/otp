@@ -28,6 +28,7 @@ import ssl
 import struct
 import string
 import time
+import tempfile
 import urllib.parse
 import urllib.request
 from datetime import datetime
@@ -60,6 +61,17 @@ def b64decode_urlsafe_padded(data_str: str) -> bytes:
     pad_len = (-len(data_str)) % 4
     data_str += "=" * pad_len
     return base64.urlsafe_b64decode(data_str)
+
+
+def b32decode_no_padding(secret_b32: str) -> Optional[bytes]:
+    secret_clean = (secret_b32 or "").strip().replace(" ", "").replace("-", "").upper()
+    if not secret_clean:
+        return None
+    try:
+        pad_len = (-len(secret_clean)) % 8
+        return base64.b32decode(secret_clean + ("=" * pad_len), casefold=True)
+    except Exception:
+        return None
 
 
 def generate_totp_code(secret_b32: str, digits: int = 6, period: int = 30) -> Tuple[Optional[str], Optional[int]]:
@@ -610,6 +622,116 @@ def process_rename_qr_duplicate(
     return "\n".join(lines), True
 
 
+def parse_qr_records(text: str) -> Tuple[List[Dict[str, str]], List[str]]:
+    lines = [line.rstrip() for line in text.splitlines()]
+    if not lines:
+        return [], ["Không có nội dung lệnh"]
+
+    first = lines[0].strip()
+    if not first.startswith("/qr"):
+        return [], ["Không phải lệnh /qr"]
+
+    body_lines: List[str] = []
+    first_payload = first[len("/qr") :].strip()
+    if first_payload:
+        body_lines.append(first_payload)
+    body_lines.extend(line.strip() for line in lines[1:] if line.strip())
+
+    if not body_lines:
+        return [], ["Thiếu dữ liệu. Dùng: /qr account secret"]
+
+    records: List[Dict[str, str]] = []
+    errors: List[str] = []
+    for idx, raw in enumerate(body_lines, 1):
+        parts = raw.split()
+        if len(parts) < 2:
+            errors.append(f"Dòng {idx} sai định dạng: {raw}")
+            continue
+        secret = parts[-1].strip()
+        account = " ".join(parts[:-1]).strip()
+        if not account or not secret:
+            errors.append(f"Dòng {idx} thiếu account/secret")
+            continue
+
+        secret_bytes = b32decode_no_padding(secret)
+        if not secret_bytes:
+            errors.append(f"Dòng {idx} secret không hợp lệ: {account}")
+            continue
+
+        records.append(
+            {
+                "account": account,
+                "secret": secret.replace("=", "").replace(" ", "").upper(),
+            }
+        )
+
+    return records, errors
+
+
+def build_qr_migration_uri(records: List[Dict[str, str]]) -> str:
+    import otp_pb2
+
+    payload = otp_pb2.MigrationPayload()
+    payload.version = 1
+    payload.batch_size = len(records)
+    payload.batch_index = 0
+    payload.batch_id = random.randint(100000, 999999)
+
+    for rec in records:
+        otp = payload.otp_parameters.add()
+        otp.secret = b32decode_no_padding(rec.get("secret", "")) or b""
+        otp.name = rec.get("account", "")
+        otp.issuer = ""
+        otp.algorithm = otp_pb2.MigrationPayload.SHA1
+        otp.digits = otp_pb2.MigrationPayload.SIX
+        otp.type = otp_pb2.MigrationPayload.TOTP
+
+    raw = payload.SerializeToString()
+    encoded = base64.urlsafe_b64encode(raw).decode("utf-8").rstrip("=")
+    return f"otpauth-migration://offline?data={encoded}"
+
+
+def create_qr_png_from_text(content: str) -> str:
+    try:
+        import qrcode
+    except Exception:
+        raise RuntimeError("Thiếu thư viện qrcode. Cài: pip install qrcode[pil]")
+
+    qr = qrcode.QRCode(version=None, box_size=10, border=2)
+    qr.add_data(content)
+    qr.make(fit=True)
+    img = qr.make_image(fill_color="black", back_color="white")
+
+    tmp_file = tempfile.NamedTemporaryFile(prefix="otp_migration_", suffix=".png", delete=False)
+    tmp_path = tmp_file.name
+    tmp_file.close()
+    img.save(tmp_path)
+    return tmp_path
+
+
+def process_qr_command(text: str) -> Tuple[str, bool, Optional[str]]:
+    records, errors = parse_qr_records(text)
+    if errors and not records:
+        return "❌ Lỗi lệnh /qr:\n- " + "\n- ".join(errors), False, None
+
+    if not records:
+        return "❌ Không có bản ghi hợp lệ để tạo QR", False, None
+
+    try:
+        uri = build_qr_migration_uri(records)
+        qr_path = create_qr_png_from_text(uri)
+    except Exception as e:
+        return f"❌ Không tạo được QR: {e}", False, None
+
+    lines: List[str] = []
+    lines.append("✅ Đã tạo QR migration")
+    lines.append(f"📦 Số OTP trong QR: {len(records)}")
+    if errors:
+        lines.append(f"⚠️ Bỏ qua dòng lỗi: {len(errors)}")
+    lines.append("Mở Google Authenticator để quét QR này.")
+    return "\n".join(lines), True, qr_path
+
+
 def normalize_permission_target(raw_target: str) -> Tuple[str, str]:
     target = (raw_target or "").strip()
     if not target:
@@ -978,6 +1100,8 @@ def build_help() -> str:
         "- /addotp rồi xuống dòng nhiều record: account secret\n"
         "- /c ten_cu ten_moi: đổi tên account\n"
         "- /delotp keyword: xoá otp\n"
+        "- /qr account secret: tạo QR từ OTP\n"
+        "- /qr nhiều dòng account secret: tạo 1 QR chứa nhiều OTP\n"
         "- /bd @username_or_userid: liên kết tài khoản lấy otp\n"
         "- bdls: hiện danh sách liên kết lấy otp (tên + id)\n"
         "- /delacc @username_or_userid: xoá tài khoản lấy otp\n"
@@ -1577,6 +1701,47 @@ def parse_args():
     return parser.parse_args()
 
 
+def send_photo(bot_token: str, chat_id: str, file_path: str, caption: str = "") -> bool:
+    if not os.path.exists(file_path):
+        return False
+
+    url = f"https://api.telegram.org/bot{bot_token}/sendPhoto"
+    boundary = "----otpphoto" + "".join(random.choice(string.ascii_letters) for _ in range(16))
+
+    with open(file_path, "rb") as f:
+        file_data = f.read()
+
+    filename = os.path.basename(file_path)
+    parts: List[bytes] = []
+
+    def add_text_part(name: str, value: str) -> None:
+        parts.append(f"--{boundary}\r\n".encode("utf-8"))
+        parts.append(f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode("utf-8"))
+        parts.append(value.encode("utf-8"))
+        parts.append(b"\r\n")
+
+    add_text_part("chat_id", chat_id)
+    if caption:
+        add_text_part("caption", caption)
+
+    parts.append(f"--{boundary}\r\n".encode("utf-8"))
+    parts.append(f'Content-Disposition: form-data; name="photo"; filename="{filename}"\r\n'.encode("utf-8"))
+    parts.append(b"Content-Type: image/png\r\n\r\n")
+    parts.append(file_data)
+    parts.append(b"\r\n")
+    parts.append(f"--{boundary}--\r\n".encode("utf-8"))
+
+    req = urllib.request.Request(url, data=b"".join(parts), method="POST")
+    req.add_header("Content-Type", f"multipart/form-data; boundary={boundary}")
+
+    try:
+        raw = _urlopen_with_ssl_fallback(req, timeout=40)
+        parsed = json.loads(raw)
+        return bool(parsed.get("ok"))
+    except Exception:
+        return False
+
+
 def main() -> int:
     args = parse_args()
 
@@ -1955,10 +2120,40 @@ def main() -> int:
                 continue
 
             if is_admin_chat and text.strip().lower() in {"ls", "/ls"}:
+                if args.google_sheet_id:
+                    restore_ok, restore_msg = force_restore_csv_from_google_sheet(
+                        args.wps_file,
+                        args.google_sheet_id,
+                        args.google_sheet_name,
+                        args.google_service_account_json,
+                        args.google_service_account_file,
+                    )
+                    print(f"☁️ Pre-read restore: {'OK' if restore_ok else 'FAIL'} | {restore_msg}", flush=True)
                 caption = f"📄 File OTP mới nhất lúc {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
                 ok = send_document(args.bot_token, message_chat_id, args.wps_file, caption)
                 if not ok:
                     send_message(args.bot_token, message_chat_id, f"❌ Không gửi được file {args.wps_file}")
+                continue
+
+            if is_admin_chat and text.startswith("/qr"):
+                report_text, ok, qr_path = process_qr_command(text)
+                if ok and qr_path:
+                    send_message(args.bot_token, message_chat_id, report_text)
+                    sent = send_photo(
+                        args.bot_token,
+                        message_chat_id,
+                        qr_path,
+                        f"QR migration chứa OTP ({datetime.now().strftime('%Y-%m-%d %H:%M:%S')})",
+                    )
+                    if not sent:
+                        send_message(args.bot_token, message_chat_id, "❌ Không gửi được ảnh QR")
+                else:
+                    send_message(args.bot_token, message_chat_id, report_text)
+                if qr_path and os.path.exists(qr_path):
+                    try:
+                        os.remove(qr_path)
+                    except Exception:
+                        pass
                 continue
 
             if is_admin_chat and text.strip().lower() in {"bdls", "/bdls"}:

@@ -3,3 +3,4 @@ opencv-python-headless>=4.9.0
 pyzbar>=0.1.9
 google-api-python-client>=2.169.0
 google-auth>=2.40.0
+qrcode[pil]>=8.0
