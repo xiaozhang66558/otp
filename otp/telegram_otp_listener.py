@@ -30,6 +30,7 @@ import struct
 import string
 import time
 import tempfile
+import traceback
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -2859,4 +2860,13 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    while True:
+        try:
+            raise SystemExit(main())
+        except SystemExit:
+            raise
+        except Exception as e:
+            print(f"💥 Listener crash ngoài dự kiến: {e}", flush=True)
+            traceback.print_exc()
+            # Keep process alive on Render by auto-restarting main loop.
+            time.sleep(2.0)
