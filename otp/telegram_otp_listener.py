@@ -2479,6 +2479,12 @@ def main() -> int:
                         username = str(user.get("username", "")).strip()
                         full_name = build_refresh_actor_name(user)
                         if user_id:
+                            req_key = f"permreq:{user_id}"
+                            now_req_ts = int(time.time())
+                            if is_recent_command_duplicate(args.processed_commands_file, req_key, now_req_ts, ttl_seconds=90):
+                                continue
+                            mark_command_seen(args.processed_commands_file, req_key, now_req_ts)
+
                             req_lines: List[str] = []
                             req_lines.append("📥 Yêu cầu cấp quyền lấy OTP")
                             req_lines.append(f"Tên: {full_name}")
