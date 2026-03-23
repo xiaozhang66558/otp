@@ -1229,8 +1229,12 @@ def send_message(
     payload = {"chat_id": chat_id, "text": text}
     if reply_markup:
         payload["reply_markup"] = json.dumps(reply_markup, ensure_ascii=False)
-    resp = telegram_api(bot_token, "sendMessage", payload)
-    return bool(resp.get("ok"))
+    try:
+        resp = telegram_api(bot_token, "sendMessage", payload)
+        return bool(resp.get("ok"))
+    except Exception as e:
+        print(f"[WARN] sendMessage lỗi: {e}", flush=True)
+        return False
 
 
 def edit_message_text(
@@ -1247,8 +1251,12 @@ def edit_message_text(
     }
     if reply_markup:
         payload["reply_markup"] = json.dumps(reply_markup, ensure_ascii=False)
-    resp = telegram_api(bot_token, "editMessageText", payload)
-    return bool(resp.get("ok"))
+    try:
+        resp = telegram_api(bot_token, "editMessageText", payload)
+        return bool(resp.get("ok"))
+    except Exception as e:
+        print(f"[WARN] editMessageText lỗi: {e}", flush=True)
+        return False
 
 
 def answer_callback_query(
@@ -1262,13 +1270,18 @@ def answer_callback_query(
         payload["text"] = text
     if show_alert:
         payload["show_alert"] = "true"
-    resp = telegram_api(bot_token, "answerCallbackQuery", payload)
-    return bool(resp.get("ok"))
+    try:
+        resp = telegram_api(bot_token, "answerCallbackQuery", payload)
+        return bool(resp.get("ok"))
+    except Exception as e:
+        print(f"[WARN] answerCallbackQuery lỗi: {e}", flush=True)
+        return False
 
 
 def send_document(bot_token: str, chat_id: str, file_path: str, caption: str) -> bool:
     if not os.path.exists(file_path):
         return False
+    filename = os.path.basename(file_path) or "otp_wps.csv"
 
     url = f"https://api.telegram.org/bot{bot_token}/sendDocument"
     boundary = "----otplistener" + "".join(random.choice(string.ascii_letters) for _ in range(16))
@@ -1975,6 +1988,7 @@ def parse_args():
 def send_photo(bot_token: str, chat_id: str, file_path: str, caption: str = "") -> bool:
     if not os.path.exists(file_path):
         return False
+    filename = os.path.basename(file_path) or "otp_qr.png"
 
     url = f"https://api.telegram.org/bot{bot_token}/sendPhoto"
     boundary = "----otpphoto" + "".join(random.choice(string.ascii_letters) for _ in range(16))
@@ -2404,13 +2418,10 @@ def main() -> int:
             if not text:
                 continue
 
-            # Command-level dedupe: suppress duplicate handling for same user+text burst.
+            # Keep command dedupe marker only for diagnostics; do not block execution.
+            # Blocking here made normal repeated queries look like bot was not responding.
             cmd_key = f"{message_chat_id}:{str(user.get('id', '')).strip()}:{text[:200]}"
-            now_cmd_ts = int(time.time())
-            if is_recent_command_duplicate(args.processed_commands_file, cmd_key, now_cmd_ts):
-                print(f"[SKIP] Lệnh trùng gần đây: {cmd_key}", flush=True)
-                continue
-            mark_command_seen(args.processed_commands_file, cmd_key, now_cmd_ts)
+            mark_command_seen(args.processed_commands_file, cmd_key, int(time.time()))
 
             print(f"[MAIN] Nhận tin nhắn text từ {message_chat_id}: {text[:40]}...")
 
