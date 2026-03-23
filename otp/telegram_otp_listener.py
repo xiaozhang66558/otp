@@ -262,6 +262,85 @@ def maybe_sync_google_sheet(
     )
 
 
+def load_sheet_rows(
+    spreadsheet_id: str,
+    sheet_name: str,
+    service_account_json: str,
+    service_account_file: str,
+) -> Tuple[bool, List[List[str]], str]:
+    if not (spreadsheet_id or "").strip():
+        return False, [], "Thiếu GOOGLE_SHEET_ID"
+
+    account_info, err = _load_google_service_account_info(service_account_json, service_account_file)
+    if not account_info:
+        return False, [], err
+
+    try:
+        from google.oauth2.service_account import Credentials
+        from googleapiclient.discovery import build
+    except Exception as e:
+        return False, [], f"Thiếu thư viện Google API: {e}"
+
+    try:
+        creds = Credentials.from_service_account_info(
+            account_info,
+            scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"],
+        )
+        service = build("sheets", "v4", credentials=creds, cache_discovery=False)
+        resp = service.spreadsheets().values().get(
+            spreadsheetId=spreadsheet_id,
+            range=f"{sheet_name}!A:Z",
+        ).execute()
+        values = resp.get("values") or []
+        return True, values, ""
+    except Exception as e:
+        return False, [], f"Lỗi đọc Google Sheets: {e}"
+
+
+def restore_csv_from_google_sheet_if_newer(
+    csv_path: str,
+    spreadsheet_id: str,
+    sheet_name: str,
+    service_account_json: str,
+    service_account_file: str,
+) -> Tuple[bool, str]:
+    if not (spreadsheet_id or "").strip():
+        return True, "Bỏ qua restore (chưa cấu hình GOOGLE_SHEET_ID)"
+
+    ok, values, err = load_sheet_rows(
+        spreadsheet_id,
+        sheet_name,
+        service_account_json,
+        service_account_file,
+    )
+    if not ok:
+        return False, err
+    if not values:
+        return True, "Google Sheet đang trống"
+
+    sheet_header = [str(col).strip() for col in values[0]]
+    if not sheet_header:
+        return False, "Google Sheet không có header hợp lệ"
+
+    local_fieldnames, local_rows = load_csv_rows(csv_path)
+    sheet_rows_count = max(len(values) - 1, 0)
+    local_rows_count = len(local_rows)
+
+    # If cloud already has more rows than local, restore local from cloud.
+    if sheet_rows_count <= local_rows_count:
+        return True, f"Không cần restore (local={local_rows_count}, sheet={sheet_rows_count})"
+
+    normalized_width = len(sheet_header)
+    rebuilt_rows: List[Dict[str, str]] = []
+    for raw_row in values[1:]:
+        padded = list(raw_row) + [""] * (normalized_width - len(raw_row))
+        rebuilt_rows.append({sheet_header[idx]: str(padded[idx]) for idx in range(normalized_width)})
+
+    os.makedirs(os.path.dirname(csv_path) or ".", exist_ok=True)
+    save_csv_rows(csv_path, sheet_header, rebuilt_rows)
+    return True, f"Đã restore {len(rebuilt_rows)} dòng từ Google Sheet"
+
+
 def load_permissions(permission_file: str) -> Dict[str, Dict[str, Dict[str, str]]]:
     if not os.path.exists(permission_file):
         return {"get": {}, "delete": {}}
@@ -1367,6 +1446,15 @@ def main() -> int:
     if not args.bot_token or not args.chat_id or not args.employee_chat_id:
         print("❌ Thiếu TELEGRAM_BOT_TOKEN hoặc chat id của admin/nhân viên")
         return 1
+
+    restore_ok, restore_msg = restore_csv_from_google_sheet_if_newer(
+        args.wps_file,
+        args.google_sheet_id,
+        args.google_sheet_name,
+        args.google_service_account_json,
+        args.google_service_account_file,
+    )
+    print(f"☁️ Restore Google Sheet: {'OK' if restore_ok else 'FAIL'} | {restore_msg}")
 
     offset = load_offset(args.offset_file)
     print("🤖 Telegram listener đang chạy...")
