@@ -1676,6 +1676,24 @@ def build_myid_message(user: Dict, permission_file: str) -> str:
     return "\n".join(lines)
 
 
+def build_access_request_buttons(user_id: str) -> Dict:
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "✅ Chấp thuận", "callback_data": f"reqok:{user_id}"},
+                {"text": "❌ Từ chối", "callback_data": f"reqno:{user_id}"},
+            ]
+        ]
+    }
+
+
+def grant_get_permission_for_user_id(permission_file: str, user_id: str) -> None:
+    permission_data = load_permissions(permission_file)
+    key = f"id:{user_id}"
+    permission_data.setdefault("get", {})[key] = user_id
+    save_permissions(permission_file, permission_data)
+
+
 def process_qr_photo(bot_token: str, msg: Dict, csv_path: str) -> Tuple[str, bool, List[Dict[str, str]]]:
     photos = msg.get("photo") or []
     if not photos:
@@ -1989,6 +2007,43 @@ def main() -> int:
                         answer_callback_query(args.bot_token, callback_id, selected_text)
                     continue
 
+                if callback_data.startswith("reqok:") or callback_data.startswith("reqno:"):
+                    is_admin_callback = callback_chat_id == str(args.chat_id)
+                    if not is_admin_callback:
+                        answer_callback_query(args.bot_token, callback_id, "Nút này chỉ dùng ở nhóm admin")
+                        continue
+
+                    if not is_chat_admin(args.bot_token, args.chat_id, str(callback_user.get("id", ""))):
+                        answer_callback_query(args.bot_token, callback_id, "Chỉ admin mới được duyệt")
+                        continue
+
+                    action, user_id = callback_data.split(":", 1)
+                    user_id = user_id.strip()
+                    if not user_id.isdigit():
+                        answer_callback_query(args.bot_token, callback_id, "User ID không hợp lệ")
+                        continue
+
+                    if action == "reqok":
+                        grant_get_permission_for_user_id(args.permission_file, user_id)
+                        result_text = f"✅ Đã chấp thuận quyền lấy OTP cho user_id {user_id}"
+                        edit_message_text(
+                            args.bot_token,
+                            callback_chat_id,
+                            callback_message_id,
+                            callback_text + "\n\n" + result_text,
+                        )
+                        answer_callback_query(args.bot_token, callback_id, "Đã chấp thuận")
+                    else:
+                        result_text = f"❌ Đã từ chối yêu cầu quyền của user_id {user_id}"
+                        edit_message_text(
+                            args.bot_token,
+                            callback_chat_id,
+                            callback_message_id,
+                            callback_text + "\n\n" + result_text,
+                        )
+                        answer_callback_query(args.bot_token, callback_id, "Đã từ chối")
+                    continue
+
                 if callback_data.startswith("renqrpick:"):
                     is_admin_callback = callback_chat_id == str(args.chat_id)
                     if not is_admin_callback:
@@ -2199,6 +2254,28 @@ def main() -> int:
 
             if text.startswith("/myid"):
                 send_message(args.bot_token, message_chat_id, build_myid_message(user, args.permission_file))
+
+                if is_employee_chat:
+                    permission_data = load_permissions(args.permission_file)
+                    if not user_has_permission(permission_data, "get", user):
+                        user_id = str(user.get("id", "")).strip()
+                        username = str(user.get("username", "")).strip()
+                        full_name = build_refresh_actor_name(user)
+                        if user_id:
+                            req_lines: List[str] = []
+                            req_lines.append("📥 Yêu cầu cấp quyền lấy OTP")
+                            req_lines.append(f"Tên: {full_name}")
+                            req_lines.append(f"Username: @{username}" if username else "Username: (không có)")
+                            req_lines.append(f"User ID: {user_id}")
+                            req_lines.append(f"Nhóm nhân viên: {args.employee_chat_id}")
+                            req_lines.append("")
+                            req_lines.append("Admin bấm nút để duyệt nhanh:")
+                            send_message(
+                                args.bot_token,
+                                str(args.chat_id),
+                                "\n".join(req_lines),
+                                build_access_request_buttons(user_id),
+                            )
                 continue
 
             if is_admin_chat and (text.startswith("/grantotp") or text.startswith("/bd")):
