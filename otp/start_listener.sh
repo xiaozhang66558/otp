@@ -17,17 +17,16 @@ if [[ ! -f "$DATA_DIR/telegram_offset.txt" && -f "telegram_offset.txt" ]]; then
   cp telegram_offset.txt "$DATA_DIR/telegram_offset.txt"
 fi
 
-# Start tiny health-check HTTP server so Render free Web Service is happy
-python3 -c "
-import http.server, threading, os
-port = int(os.environ.get('PORT', 10000))
-class H(http.server.BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200); self.end_headers(); self.wfile.write(b'OK')
-    def log_message(self, *a): pass
-threading.Thread(target=http.server.HTTPServer(('', port), H).serve_forever, daemon=True).start()
-print(f'Health check OK on port {port}', flush=True)
-" &
+# Keep a lightweight HTTP server alive for Render Web Service health checks.
+HEALTH_PORT="${PORT:-10000}"
+python3 -u -c '
+import os
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+
+port = int(os.environ.get("PORT", "10000"))
+ThreadingHTTPServer(("0.0.0.0", port), SimpleHTTPRequestHandler).serve_forever()
+' >/dev/null 2>&1 &
+echo "Health check OK on port ${HEALTH_PORT}"
 
 exec python3 -u telegram_otp_listener.py \
   --sleep-seconds "$SLEEP_SECONDS" \
