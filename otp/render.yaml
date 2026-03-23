@@ -1,6 +1,7 @@
 services:
   - type: worker
     name: telegram-otp-listener
+    numInstances: 1
     env: docker
     rootDir: otp
     dockerfilePath: Dockerfile
