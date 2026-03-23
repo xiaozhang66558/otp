@@ -489,6 +489,39 @@ def mark_update_processed(processed_file: str, update_id: int, keep_last: int = 
     save_processed_update_ids(processed_file, ids)
 
 
+def check_and_mark_update_processed(processed_file: str, update_id: int, keep_last: int = 5000) -> bool:
+    """
+    Atomically checks if update_id was already processed.
+    Returns True if already processed (should SKIP).
+    Returns False if new (has been marked, should PROCESS).
+    Uses fcntl.flock to prevent two simultaneous bot instances from both
+    processing the same update (the main cause of duplicate messages).
+    """
+    try:
+        import fcntl
+        lock_path = processed_file + ".lock"
+        os.makedirs(os.path.dirname(os.path.abspath(processed_file)), exist_ok=True)
+        with open(lock_path, "a") as lf:
+            fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
+            try:
+                ids = load_processed_update_ids(processed_file)
+                if int(update_id) in set(ids):
+                    return True  # Already processed — skip
+                ids.append(int(update_id))
+                if len(ids) > keep_last:
+                    ids = ids[-keep_last:]
+                save_processed_update_ids(processed_file, ids)
+                return False  # Newly marked — process
+            finally:
+                fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
+    except Exception as e:
+        print(f"[WARN] flock không khả dụng: {e} — dùng check thường", flush=True)
+        if is_update_already_processed(processed_file, update_id):
+            return True
+        mark_update_processed(processed_file, update_id, keep_last)
+        return False
+
+
 def load_recent_message_keys(processed_file: str) -> Dict[str, int]:
     if not os.path.exists(processed_file):
         return {}
@@ -1190,12 +1223,9 @@ def send_message(
     text: str,
     reply_markup: Optional[Dict] = None,
 ) -> bool:
-    markup_key = json.dumps(reply_markup, ensure_ascii=False, sort_keys=True) if reply_markup else ""
-    text_hash = hashlib.sha1(((text or "") + "|" + markup_key).encode("utf-8")).hexdigest()
-    dedupe_key = f"sendMessage:{chat_id}:{text_hash}"
-    if not should_send_outbound(dedupe_key):
-        return True
-
+    # Outbound dedupe removed: upstream layers (atomic update-level + message-level +
+    # command-level) already prevent duplicate processing.  Content-based outbound
+    # dedupe was causing legitimate responses from different users to be silently dropped.
     payload = {"chat_id": chat_id, "text": text}
     if reply_markup:
         payload["reply_markup"] = json.dumps(reply_markup, ensure_ascii=False)
@@ -1239,17 +1269,6 @@ def answer_callback_query(
 def send_document(bot_token: str, chat_id: str, file_path: str, caption: str) -> bool:
     if not os.path.exists(file_path):
         return False
-
-    filename = os.path.basename(file_path)
-    try:
-        stat = os.stat(file_path)
-        file_sig = f"{filename}:{stat.st_size}:{int(stat.st_mtime)}"
-    except Exception:
-        file_sig = filename
-    dedupe_hash = hashlib.sha1((caption + "|" + file_sig).encode("utf-8")).hexdigest()
-    dedupe_key = f"sendDocument:{chat_id}:{dedupe_hash}"
-    if not should_send_outbound(dedupe_key):
-        return True
 
     url = f"https://api.telegram.org/bot{bot_token}/sendDocument"
     boundary = "----otplistener" + "".join(random.choice(string.ascii_letters) for _ in range(16))
@@ -1515,7 +1534,13 @@ def process_getotp_query(query: str, csv_path: str) -> Tuple[str, bool]:
         return "❌ Chưa có dữ liệu OTP", False
 
     query_lower = query.lower()
-    matched_rows = [row for row in rows if query_lower in (row.get("Account") or "").lower()]
+    # Multi-token search: split query by whitespace, require ALL tokens present in account name.
+    # E.g. "91 a" matches "91club abc", "91club abcd" because both "91" and "a" are substrings.
+    tokens = query_lower.split()
+    matched_rows = [
+        row for row in rows
+        if all(token in (row.get("Account") or "").lower() for token in tokens)
+    ]
 
     if not matched_rows:
         return f"❌ Không tìm thấy OTP nào khớp: {query}", False
@@ -1951,17 +1976,6 @@ def send_photo(bot_token: str, chat_id: str, file_path: str, caption: str = "") 
     if not os.path.exists(file_path):
         return False
 
-    filename = os.path.basename(file_path)
-    try:
-        stat = os.stat(file_path)
-        file_sig = f"{filename}:{stat.st_size}:{int(stat.st_mtime)}"
-    except Exception:
-        file_sig = filename
-    dedupe_hash = hashlib.sha1((caption + "|" + file_sig).encode("utf-8")).hexdigest()
-    dedupe_key = f"sendPhoto:{chat_id}:{dedupe_hash}"
-    if not should_send_outbound(dedupe_key):
-        return True
-
     url = f"https://api.telegram.org/bot{bot_token}/sendPhoto"
     boundary = "----otpphoto" + "".join(random.choice(string.ascii_letters) for _ in range(16))
 
@@ -2061,13 +2075,13 @@ def main() -> int:
             update_id = upd.get("update_id", 0)
             offset = max(offset, update_id + 1)
 
-            if is_update_already_processed(args.processed_updates_file, int(update_id)):
+            # Atomic check+mark via flock — prevents two concurrent bot instances
+            # (during Render deploy overlap) from both processing the same update.
+            if check_and_mark_update_processed(args.processed_updates_file, int(update_id)):
                 print(f"[SKIP] Update đã xử lý trước đó: {update_id}", flush=True)
                 save_offset(args.offset_file, offset)
                 continue
 
-            # Mark+saving offset early prevents duplicate replies when service restarts/redeploys.
-            mark_update_processed(args.processed_updates_file, int(update_id))
             save_offset(args.offset_file, offset)
 
             callback_query = upd.get("callback_query") or {}
