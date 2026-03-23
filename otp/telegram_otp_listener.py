@@ -31,7 +31,7 @@ import time
 import urllib.parse
 import urllib.request
 from datetime import datetime
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 
 def load_otp_modules():
@@ -281,6 +281,140 @@ def load_permissions(permission_file: str) -> Dict[str, Dict[str, Dict[str, str]
 def save_permissions(permission_file: str, data: Dict[str, Dict[str, Dict[str, str]]]) -> None:
     with open(permission_file, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2, sort_keys=True)
+
+
+def load_pending_qr_renames(pending_file: str) -> Dict[str, Dict[str, Any]]:
+    if not os.path.exists(pending_file):
+        return {}
+
+    try:
+        with open(pending_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def save_pending_qr_renames(pending_file: str, data: Dict[str, Dict[str, Any]]) -> None:
+    with open(pending_file, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2, sort_keys=True)
+
+
+def remember_qr_duplicate_names(
+    pending_file: str,
+    chat_id: str,
+    user_id: str,
+    duplicate_names: List[Dict[str, str]],
+) -> int:
+    pending = load_pending_qr_renames(pending_file)
+    bucket_key = f"{chat_id}:{user_id}"
+    items: List[Dict[str, str]] = []
+
+    for rec in duplicate_names:
+        idx = str(rec.get("index", "")).strip()
+        account_cell = str(rec.get("account_cell", "")).strip()
+        secret = str(rec.get("secret", "")).strip()
+        if not (idx and account_cell and secret):
+            continue
+        items.append(
+            {
+                "index": idx,
+                "account_cell": account_cell,
+                "secret": secret,
+            }
+        )
+
+    pending[bucket_key] = {
+        "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "items": items,
+    }
+    save_pending_qr_renames(pending_file, pending)
+    return len(items)
+
+
+def process_rename_qr_duplicate(
+    text: str,
+    csv_path: str,
+    pending_file: str,
+    chat_id: str,
+    user_id: str,
+) -> Tuple[str, bool]:
+    payload = text[len("/renqr") :].strip()
+    if not payload:
+        return "❌ Dùng: /renqr stt|ten_moi", False
+
+    if "|" in payload:
+        idx_raw, new_name = [p.strip() for p in payload.split("|", 1)]
+    else:
+        parts = payload.split(maxsplit=1)
+        if len(parts) < 2:
+            return "❌ Dùng: /renqr stt|ten_moi", False
+        idx_raw, new_name = parts[0].strip(), parts[1].strip()
+
+    if not idx_raw.isdigit() or not new_name:
+        return "❌ Dùng: /renqr stt|ten_moi", False
+
+    pending = load_pending_qr_renames(pending_file)
+    bucket_key = f"{chat_id}:{user_id}"
+    bucket = pending.get(bucket_key) or {}
+    items = bucket.get("items") if isinstance(bucket, dict) else None
+    if not isinstance(items, list) or not items:
+        return "❌ Không có OTP trùng tên đang chờ đổi. Gửi QR lại rồi thử /renqr", False
+
+    target = None
+    remain: List[Dict[str, str]] = []
+    for item in items:
+        item_idx = str((item or {}).get("index", "")).strip()
+        if item_idx == idx_raw and target is None:
+            target = item
+        else:
+            remain.append(item)
+
+    if not target:
+        return f"❌ Không tìm thấy mã thứ {idx_raw} trong danh sách trùng tên đang chờ đổi", False
+
+    new_name_lower = new_name.lower()
+    existing_names = load_existing_account_names(csv_path)
+    if new_name_lower in existing_names:
+        return f"❌ Tên mới đã tồn tại: {new_name}", False
+
+    secret = str(target.get("secret", "")).strip()
+    new_key = stable_key(new_name, "", secret)
+    existing_keys = load_existing_keys(csv_path)
+    if new_key in existing_keys:
+        return "❌ Secret này đã tồn tại với tên khác, không thể thêm trùng", False
+
+    append_rows(
+        csv_path,
+        [
+            {
+                "account": new_name,
+                "issuer": "",
+                "secret": secret,
+                "key": new_key,
+            }
+        ],
+    )
+
+    if remain:
+        pending[bucket_key] = {
+            "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "items": remain,
+        }
+    else:
+        pending.pop(bucket_key, None)
+    save_pending_qr_renames(pending_file, pending)
+
+    lines = [
+        "✅ Đã lưu OTP trùng tên sau khi đổi",
+        f"- Mã thứ: {idx_raw}",
+        f"- Tên cũ: {target.get('account_cell', '')}",
+        f"- Tên mới: {new_name}",
+        f"- Còn chờ đổi: {len(remain)}",
+    ]
+    if remain:
+        lines.append("Tiếp tục dùng: /renqr stt|ten_moi")
+    return "\n".join(lines), True
 
 
 def normalize_permission_target(raw_target: str) -> Tuple[str, str]:
@@ -656,6 +790,7 @@ def build_help() -> str:
         "- /delacc @username_or_userid: xoá tài khoản lấy otp\n"
         "- ls hoặc /ls: gửi file OTP mới nhất\n"
         "- Gửi ảnh QR migration: tự đọc OTP và thêm vào file\n\n"
+        "- /renqr stt|ten_moi: lưu OTP đang trùng tên sau khi đổi tên\n\n"
         "📘 Nhóm nhân viên:\n"
         "- /myid\n"
         "- /getotp keyword\n"
@@ -1116,18 +1251,18 @@ def build_myid_message(user: Dict, permission_file: str) -> str:
     return "\n".join(lines)
 
 
-def process_qr_photo(bot_token: str, msg: Dict, csv_path: str) -> Tuple[str, bool]:
+def process_qr_photo(bot_token: str, msg: Dict, csv_path: str) -> Tuple[str, bool, List[Dict[str, str]]]:
     photos = msg.get("photo") or []
     if not photos:
-        return "❌ Không có ảnh QR", False
+        return "❌ Không có ảnh QR", False, []
 
     file_id = photos[-1].get("file_id")
     if not file_id:
-        return "❌ Không lấy được file_id ảnh", False
+        return "❌ Không lấy được file_id ảnh", False, []
 
     file_path = telegram_get_file_path(bot_token, file_id)
     if not file_path:
-        return "❌ Không lấy được file_path từ Telegram", False
+        return "❌ Không lấy được file_path từ Telegram", False, []
 
     tmp_name = f"tmp_qr_{int(time.time())}_{random.randint(1000,9999)}.jpg"
     tmp_path = os.path.join(os.getcwd(), tmp_name)
@@ -1136,14 +1271,14 @@ def process_qr_photo(bot_token: str, msg: Dict, csv_path: str) -> Tuple[str, boo
         print(f"[QR_PHOTO] Bắt đầu tải ảnh: {tmp_path}")
         if not download_telegram_file(bot_token, file_path, tmp_path):
             print("[QR_PHOTO] Tải ảnh thất bại")
-            return "❌ Tải ảnh từ Telegram thất bại", False
+            return "❌ Tải ảnh từ Telegram thất bại", False, []
 
         print(f"[QR_PHOTO] Tải xong, kích thước: {os.path.getsize(tmp_path)} bytes")
         print("[QR_PHOTO] Bắt đầu giải mã OTP từ ảnh")
         otp_rows = extract_otps_from_qr_image(tmp_path)
         print(f"[QR_PHOTO] Giải mã xong, tìm thấy {len(otp_rows)} OTP")
         if not otp_rows:
-            return "❌ Ảnh không có QR OTP hợp lệ", False
+            return "❌ Ảnh không có QR OTP hợp lệ", False, []
 
         existing_keys = load_existing_keys(csv_path)
         existing_names = load_existing_account_names(csv_path)
@@ -1193,12 +1328,12 @@ def process_qr_photo(bot_token: str, msg: Dict, csv_path: str) -> Tuple[str, boo
                 lines.append(f"- Mã thứ {idx}: {rec.get('account_cell', '')}")
 
         print(f"[QR_PHOTO] Hoàn thành, sắp gửi Telegram")
-        return "\n".join(lines), True
+        return "\n".join(lines), True, duplicate_names
     except Exception as e:
         print(f"[QR_PHOTO] LỖI: {e}")
         import traceback
         traceback.print_exc()
-        return f"❌ Lỗi xử lý QR: {e}", False
+        return f"❌ Lỗi xử lý QR: {e}", False, []
     finally:
         if os.path.exists(tmp_path):
             try:
@@ -1215,6 +1350,7 @@ def parse_args():
     parser.add_argument("--wps-file", default="otp_wps.csv")
     parser.add_argument("--offset-file", default="telegram_offset.txt")
     parser.add_argument("--permission-file", default="telegram_permissions.json")
+    parser.add_argument("--pending-file", default=os.environ.get("TELEGRAM_QR_PENDING_FILE", "telegram_qr_pending.json"))
     parser.add_argument("--poll-timeout", type=int, default=30)
     parser.add_argument("--sleep-seconds", type=float, default=1.0)
     parser.add_argument("--google-sheet-id", default=os.environ.get("GOOGLE_SHEET_ID", ""))
@@ -1380,7 +1516,22 @@ def main() -> int:
             # Nhóm admin: xử lý ảnh QR trước tiên
             if is_admin_chat and msg.get("photo"):
                 print(f"[MAIN] Nhận tin nhắn ảnh từ {message_chat_id}")
-                report_text, ok = process_qr_photo(args.bot_token, msg, args.wps_file)
+                report_text, ok, duplicate_names = process_qr_photo(args.bot_token, msg, args.wps_file)
+                if ok and duplicate_names:
+                    pending_count = remember_qr_duplicate_names(
+                        args.pending_file,
+                        message_chat_id,
+                        str(user.get("id", "")),
+                        duplicate_names,
+                    )
+                    if pending_count:
+                        tips: List[str] = []
+                        tips.append("")
+                        tips.append("🛠 OTP trùng tên đang chờ đổi rồi lưu trực tiếp:")
+                        tips.append("- Dùng: /renqr stt|ten_moi")
+                        tips.append("- Ví dụ: /renqr 2|ATPay test")
+                        tips.append(f"- Đang chờ: {pending_count} OTP")
+                        report_text = report_text + "\n" + "\n".join(tips)
                 if ok:
                     sync_ok, sync_msg = maybe_sync_google_sheet(
                         args.wps_file,
@@ -1394,6 +1545,29 @@ def main() -> int:
                 send_message(args.bot_token, message_chat_id, report_text)
                 if ok:
                     caption = f"Cập nhật OTP từ QR lúc {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                    send_document(args.bot_token, message_chat_id, args.wps_file, caption)
+                continue
+
+            if is_admin_chat and text.startswith("/renqr"):
+                report_text, ok = process_rename_qr_duplicate(
+                    text,
+                    args.wps_file,
+                    args.pending_file,
+                    message_chat_id,
+                    str(user.get("id", "")),
+                )
+                if ok:
+                    sync_ok, sync_msg = maybe_sync_google_sheet(
+                        args.wps_file,
+                        args.google_sheet_id,
+                        args.google_sheet_name,
+                        args.google_service_account_json,
+                        args.google_service_account_file,
+                    )
+                    report_text = f"{report_text}\n\n☁️ Google Sheets: {'✅ ' if sync_ok else '❌ '}{sync_msg}"
+                send_message(args.bot_token, message_chat_id, report_text)
+                if ok:
+                    caption = f"Đổi tên OTP trùng từ QR lúc {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
                     send_document(args.bot_token, message_chat_id, args.wps_file, caption)
                 continue
 
