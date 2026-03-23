@@ -442,9 +442,86 @@ def remember_qr_duplicate_names(
     pending[bucket_key] = {
         "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "items": items,
+        "awaiting_index": "",
     }
     save_pending_qr_renames(pending_file, pending)
     return len(items)
+
+
+def set_pending_qr_awaiting_index(
+    pending_file: str,
+    chat_id: str,
+    user_id: str,
+    idx_raw: str,
+) -> Tuple[bool, str]:
+    pending = load_pending_qr_renames(pending_file)
+    bucket_key = f"{chat_id}:{user_id}"
+    bucket = pending.get(bucket_key) or {}
+    items = bucket.get("items") if isinstance(bucket, dict) else None
+    if not isinstance(items, list) or not items:
+        return False, "Không có OTP trùng tên đang chờ đổi"
+
+    picked_name = ""
+    matched = False
+    for item in items:
+        if str((item or {}).get("index", "")).strip() == idx_raw:
+            picked_name = str((item or {}).get("account_cell", "")).strip()
+            matched = True
+            break
+
+    if not matched:
+        return False, f"Không tìm thấy mã thứ {idx_raw}"
+
+    bucket["awaiting_index"] = idx_raw
+    bucket["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    pending[bucket_key] = bucket
+    save_pending_qr_renames(pending_file, pending)
+    return True, picked_name
+
+
+def clear_pending_qr_awaiting_index(
+    pending_file: str,
+    chat_id: str,
+    user_id: str,
+) -> None:
+    pending = load_pending_qr_renames(pending_file)
+    bucket_key = f"{chat_id}:{user_id}"
+    bucket = pending.get(bucket_key)
+    if not isinstance(bucket, dict):
+        return
+    bucket["awaiting_index"] = ""
+    bucket["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    pending[bucket_key] = bucket
+    save_pending_qr_renames(pending_file, pending)
+
+
+def get_pending_qr_awaiting_item(
+    pending_file: str,
+    chat_id: str,
+    user_id: str,
+) -> Optional[Dict[str, str]]:
+    pending = load_pending_qr_renames(pending_file)
+    bucket_key = f"{chat_id}:{user_id}"
+    bucket = pending.get(bucket_key)
+    if not isinstance(bucket, dict):
+        return None
+
+    awaiting_index = str(bucket.get("awaiting_index", "")).strip()
+    if not awaiting_index:
+        return None
+
+    items = bucket.get("items")
+    if not isinstance(items, list):
+        return None
+
+    for item in items:
+        idx = str((item or {}).get("index", "")).strip()
+        if idx == awaiting_index:
+            return {
+                "index": idx,
+                "account_cell": str((item or {}).get("account_cell", "")).strip(),
+            }
+    return None
 
 
 def process_rename_qr_duplicate(
@@ -515,6 +592,7 @@ def process_rename_qr_duplicate(
         pending[bucket_key] = {
             "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "items": remain,
+            "awaiting_index": "",
         }
     else:
         pending.pop(bucket_key, None)
@@ -1201,6 +1279,29 @@ def build_getotp_reply_markup(message_text: str) -> Optional[Dict]:
     return build_getotp_buttons(message_text)
 
 
+def build_qr_duplicate_buttons(duplicate_names: List[Dict[str, str]]) -> Optional[Dict]:
+    if not duplicate_names:
+        return None
+
+    keyboard: List[List[Dict[str, str]]] = []
+    for rec in duplicate_names[:20]:
+        idx = str(rec.get("index", "")).strip()
+        account_cell = str(rec.get("account_cell", "")).strip()
+        if not idx:
+            continue
+        label = f"✏️ Đổi tên mã {idx}"
+        if account_cell:
+            short_name = account_cell if len(account_cell) <= 24 else (account_cell[:21] + "...")
+            label = f"✏️ #{idx} {short_name}"
+        keyboard.append([{"text": label, "callback_data": f"renqrpick:{idx}"}])
+
+    if not keyboard:
+        return None
+
+    keyboard.append([{"text": "❎ Huỷ chờ đổi tên", "callback_data": "renqrcancel"}])
+    return {"inline_keyboard": keyboard}
+
+
 def extract_refresh_history_lines(message_text: str) -> List[str]:
     lines = (message_text or "").splitlines()
     header = "🕒 Lịch sử làm mới"
@@ -1627,6 +1728,53 @@ def main() -> int:
                         answer_callback_query(args.bot_token, callback_id, selected_text)
                     continue
 
+                if callback_data.startswith("renqrpick:"):
+                    is_admin_callback = callback_chat_id == str(args.chat_id)
+                    if not is_admin_callback:
+                        answer_callback_query(args.bot_token, callback_id, "Nút này chỉ dùng ở nhóm admin")
+                        continue
+
+                    idx_str = callback_data.split(":", 1)[1].strip()
+                    if not idx_str.isdigit():
+                        answer_callback_query(args.bot_token, callback_id, "Mã OTP không hợp lệ")
+                        continue
+
+                    ok_pick, picked_name = set_pending_qr_awaiting_index(
+                        args.pending_file,
+                        callback_chat_id,
+                        str(callback_user.get("id", "")),
+                        idx_str,
+                    )
+                    if not ok_pick:
+                        answer_callback_query(args.bot_token, callback_id, picked_name)
+                        continue
+
+                    answer_callback_query(args.bot_token, callback_id, f"Đã chọn mã {idx_str}")
+                    prompt = [
+                        "📝 Vui lòng nhập tên mới cho OTP trùng:",
+                        f"- Mã thứ: {idx_str}",
+                    ]
+                    if picked_name:
+                        prompt.append(f"- Tên hiện tại: {picked_name}")
+                    prompt.append("")
+                    prompt.append("Gửi trực tiếp tên mới vào nhóm (không cần lệnh).")
+                    prompt.append("Ví dụ: ATPay test")
+                    send_message(args.bot_token, callback_chat_id, "\n".join(prompt))
+                    continue
+
+                if callback_data == "renqrcancel":
+                    is_admin_callback = callback_chat_id == str(args.chat_id)
+                    if not is_admin_callback:
+                        answer_callback_query(args.bot_token, callback_id, "Nút này chỉ dùng ở nhóm admin")
+                        continue
+                    clear_pending_qr_awaiting_index(
+                        args.pending_file,
+                        callback_chat_id,
+                        str(callback_user.get("id", "")),
+                    )
+                    answer_callback_query(args.bot_token, callback_id, "Đã huỷ chờ đổi tên")
+                    continue
+
                 answer_callback_query(args.bot_token, callback_id)
                 continue
 
@@ -1675,8 +1823,8 @@ def main() -> int:
                         tips: List[str] = []
                         tips.append("")
                         tips.append("🛠 OTP trùng tên đang chờ đổi rồi lưu trực tiếp:")
-                        tips.append("- Dùng: /renqr stt|ten_moi")
-                        tips.append("- Ví dụ: /renqr 2|ATPay test")
+                        tips.append("- Bấm nút bên dưới để chọn OTP cần đổi tên")
+                        tips.append("- Hoặc dùng: /renqr stt|ten_moi")
                         tips.append(f"- Đang chờ: {pending_count} OTP")
                         report_text = report_text + "\n" + "\n".join(tips)
                 if ok:
@@ -1689,7 +1837,8 @@ def main() -> int:
                     )
                     report_text = f"{report_text}\n\n☁️ Google Sheets: {'✅ ' if sync_ok else '❌ '}{sync_msg}"
                 print(f"[MAIN] Sắp gửi Telegram: {report_text[:50]}...")
-                send_message(args.bot_token, message_chat_id, report_text)
+                duplicate_buttons = build_qr_duplicate_buttons(duplicate_names) if (ok and duplicate_names) else None
+                send_message(args.bot_token, message_chat_id, report_text, duplicate_buttons)
                 if ok:
                     caption = f"Cập nhật OTP từ QR lúc {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
                     send_document(args.bot_token, message_chat_id, args.wps_file, caption)
@@ -1732,6 +1881,46 @@ def main() -> int:
                 continue
 
             print(f"[MAIN] Nhận tin nhắn text từ {message_chat_id}: {text[:40]}...")
+
+            if is_admin_chat and not text.startswith("/"):
+                waiting_item = get_pending_qr_awaiting_item(
+                    args.pending_file,
+                    message_chat_id,
+                    str(user.get("id", "")),
+                )
+                if waiting_item:
+                    rename_cmd = f"/renqr {waiting_item.get('index', '')}|{text}"
+                    if args.google_sheet_id:
+                        restore_ok, restore_msg = force_restore_csv_from_google_sheet(
+                            args.wps_file,
+                            args.google_sheet_id,
+                            args.google_sheet_name,
+                            args.google_service_account_json,
+                            args.google_service_account_file,
+                        )
+                        print(f"☁️ Pre-write restore: {'OK' if restore_ok else 'FAIL'} | {restore_msg}", flush=True)
+
+                    report_text, ok = process_rename_qr_duplicate(
+                        rename_cmd,
+                        args.wps_file,
+                        args.pending_file,
+                        message_chat_id,
+                        str(user.get("id", "")),
+                    )
+                    if ok:
+                        sync_ok, sync_msg = maybe_sync_google_sheet(
+                            args.wps_file,
+                            args.google_sheet_id,
+                            args.google_sheet_name,
+                            args.google_service_account_json,
+                            args.google_service_account_file,
+                        )
+                        report_text = f"{report_text}\n\n☁️ Google Sheets: {'✅ ' if sync_ok else '❌ '}{sync_msg}"
+                    send_message(args.bot_token, message_chat_id, report_text)
+                    if ok:
+                        caption = f"Đổi tên OTP trùng từ QR lúc {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                        send_document(args.bot_token, message_chat_id, args.wps_file, caption)
+                    continue
 
             if text.startswith("/helpotp") or text.startswith("/help"):
                 send_message(args.bot_token, message_chat_id, build_help())
