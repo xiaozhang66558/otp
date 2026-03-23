@@ -468,6 +468,50 @@ def mark_update_processed(processed_file: str, update_id: int, keep_last: int = 
     save_processed_update_ids(processed_file, ids)
 
 
+def load_recent_message_keys(processed_file: str) -> Dict[str, int]:
+    if not os.path.exists(processed_file):
+        return {}
+    try:
+        with open(processed_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            return {}
+        out: Dict[str, int] = {}
+        for k, v in data.items():
+            try:
+                out[str(k)] = int(v)
+            except Exception:
+                continue
+        return out
+    except Exception:
+        return {}
+
+
+def save_recent_message_keys(processed_file: str, keys: Dict[str, int]) -> None:
+    with open(processed_file, "w", encoding="utf-8") as f:
+        json.dump(keys, f, ensure_ascii=False, indent=2, sort_keys=True)
+
+
+def is_recent_message_duplicate(processed_file: str, message_key: str, now_ts: int, ttl_seconds: int = 180) -> bool:
+    keys = load_recent_message_keys(processed_file)
+    last_ts = keys.get(message_key)
+    if last_ts is None:
+        return False
+    return (now_ts - int(last_ts)) <= ttl_seconds
+
+
+def mark_message_seen(processed_file: str, message_key: str, now_ts: int, keep_last: int = 5000) -> None:
+    keys = load_recent_message_keys(processed_file)
+    keys[message_key] = int(now_ts)
+
+    # Cleanup old entries to keep this file bounded.
+    entries = sorted(keys.items(), key=lambda kv: kv[1])
+    if len(entries) > keep_last:
+        entries = entries[-keep_last:]
+    trimmed = {k: v for k, v in entries}
+    save_recent_message_keys(processed_file, trimmed)
+
+
 def remember_qr_duplicate_names(
     pending_file: str,
     chat_id: str,
@@ -1733,6 +1777,7 @@ def parse_args():
     parser.add_argument("--permission-file", default="telegram_permissions.json")
     parser.add_argument("--pending-file", default=os.environ.get("TELEGRAM_QR_PENDING_FILE", "telegram_qr_pending.json"))
     parser.add_argument("--processed-updates-file", default=os.environ.get("TELEGRAM_PROCESSED_UPDATES_FILE", "telegram_processed_updates.json"))
+    parser.add_argument("--processed-messages-file", default=os.environ.get("TELEGRAM_PROCESSED_MESSAGES_FILE", "telegram_processed_messages.json"))
     parser.add_argument("--poll-timeout", type=int, default=30)
     parser.add_argument("--sleep-seconds", type=float, default=1.0)
     parser.add_argument("--google-sheet-id", default=os.environ.get("GOOGLE_SHEET_ID", ""))
@@ -1999,8 +2044,18 @@ def main() -> int:
             user = msg.get("from") or {}
             text = (msg.get("text") or "").strip()
             message_chat_id = str(chat.get("id", ""))
+            message_id = str(msg.get("message_id", "")).strip()
             is_admin_chat = message_chat_id == str(args.chat_id)
             is_employee_chat = message_chat_id == str(args.employee_chat_id)
+
+            if message_chat_id and message_id:
+                marker = (text or "[photo]" if msg.get("photo") else "[other]")[:120]
+                message_key = f"{message_chat_id}:{message_id}:{marker}"
+                now_ts = int(time.time())
+                if is_recent_message_duplicate(args.processed_messages_file, message_key, now_ts):
+                    print(f"[SKIP] Tin nhắn trùng gần đây: {message_key}", flush=True)
+                    continue
+                mark_message_seen(args.processed_messages_file, message_key, now_ts)
 
             print(
                 f"[UPDATE] ID={update_id}, chat_id={message_chat_id}, admin_chat={is_admin_chat}, employee_chat={is_employee_chat}, has_text={bool(text)}, has_photo={bool(msg.get('photo'))}",
