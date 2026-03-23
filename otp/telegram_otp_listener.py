@@ -623,6 +623,14 @@ def mark_command_seen(processed_file: str, command_key: str, now_ts: int, keep_l
     save_recent_message_keys(processed_file, {k: v for k, v in entries})
 
 
+def clear_recent_command_key(processed_file: str, command_key: str) -> None:
+    keys = load_recent_message_keys(processed_file)
+    if command_key not in keys:
+        return
+    del keys[command_key]
+    save_recent_message_keys(processed_file, keys)
+
+
 def remember_qr_duplicate_names(
     pending_file: str,
     chat_id: str,
@@ -2249,6 +2257,17 @@ def main() -> int:
                         answer_callback_query(args.bot_token, callback_id, "User ID không hợp lệ")
                         continue
 
+                    clear_recent_command_key(args.processed_commands_file, f"permreq:{user_id}")
+                    notify_key = f"permresult:{action}:{user_id}"
+                    should_notify_employee_group = not is_recent_command_duplicate(
+                        args.processed_commands_file,
+                        notify_key,
+                        int(time.time()),
+                        ttl_seconds=90,
+                    )
+                    if should_notify_employee_group:
+                        mark_command_seen(args.processed_commands_file, notify_key, int(time.time()))
+
                     if action == "reqok":
                         grant_get_permission_for_user_id(args.permission_file, user_id)
                         result_text = f"✅ Đã chấp thuận quyền lấy OTP cho user_id {user_id}"
@@ -2258,14 +2277,16 @@ def main() -> int:
                             callback_message_id,
                             callback_text + "\n\n" + result_text,
                         )
-                        sent_group = send_message(
-                            args.bot_token,
-                            str(args.employee_chat_id),
-                            "✅ Kết quả duyệt quyền OTP\n"
-                            f"- User ID: {user_id}\n"
-                            "- Trạng thái: Đã chấp thuận\n"
-                            "Bạn có thể dùng /getotp ngay.",
-                        )
+                        sent_group = True
+                        if should_notify_employee_group:
+                            sent_group = send_message(
+                                args.bot_token,
+                                str(args.employee_chat_id),
+                                "✅ Kết quả duyệt quyền OTP\n"
+                                f"- User ID: {user_id}\n"
+                                "- Trạng thái: Đã chấp thuận\n"
+                                "Bạn có thể dùng /getotp ngay.",
+                            )
                         # Try DM as well; may fail if user has not started bot.
                         send_message(
                             args.bot_token,
@@ -2283,14 +2304,16 @@ def main() -> int:
                             callback_message_id,
                             callback_text + "\n\n" + result_text,
                         )
-                        sent_group = send_message(
-                            args.bot_token,
-                            str(args.employee_chat_id),
-                            "❌ Kết quả duyệt quyền OTP\n"
-                            f"- User ID: {user_id}\n"
-                            "- Trạng thái: Từ chối\n"
-                            "Liên hệ admin nếu cần mở quyền.",
-                        )
+                        sent_group = True
+                        if should_notify_employee_group:
+                            sent_group = send_message(
+                                args.bot_token,
+                                str(args.employee_chat_id),
+                                "❌ Kết quả duyệt quyền OTP\n"
+                                f"- User ID: {user_id}\n"
+                                "- Trạng thái: Từ chối\n"
+                                "Liên hệ admin nếu cần mở quyền.",
+                            )
                         send_message(
                             args.bot_token,
                             user_id,
@@ -2521,24 +2544,29 @@ def main() -> int:
                         if user_id:
                             req_key = f"permreq:{user_id}"
                             now_req_ts = int(time.time())
-                            if is_recent_command_duplicate(args.processed_commands_file, req_key, now_req_ts, ttl_seconds=90):
-                                continue
-                            mark_command_seen(args.processed_commands_file, req_key, now_req_ts)
-
-                            req_lines: List[str] = []
-                            req_lines.append("📥 Yêu cầu cấp quyền lấy OTP")
-                            req_lines.append(f"Tên: {full_name}")
-                            req_lines.append(f"Username: @{username}" if username else "Username: (không có)")
-                            req_lines.append(f"User ID: {user_id}")
-                            req_lines.append(f"Nhóm nhân viên: {args.employee_chat_id}")
-                            req_lines.append("")
-                            req_lines.append("Admin bấm nút để duyệt nhanh:")
-                            send_message(
-                                args.bot_token,
-                                str(args.chat_id),
-                                "\n".join(req_lines),
-                                build_access_request_buttons(user_id),
+                            should_notify_admin = not is_recent_command_duplicate(
+                                args.processed_commands_file,
+                                req_key,
+                                now_req_ts,
+                                ttl_seconds=90,
                             )
+                            if should_notify_admin:
+                                mark_command_seen(args.processed_commands_file, req_key, now_req_ts)
+
+                                req_lines: List[str] = []
+                                req_lines.append("📥 Yêu cầu cấp quyền lấy OTP")
+                                req_lines.append(f"Tên: {full_name}")
+                                req_lines.append(f"Username: @{username}" if username else "Username: (không có)")
+                                req_lines.append(f"User ID: {user_id}")
+                                req_lines.append(f"Nhóm nhân viên: {args.employee_chat_id}")
+                                req_lines.append("")
+                                req_lines.append("Admin bấm nút để duyệt nhanh:")
+                                send_message(
+                                    args.bot_token,
+                                    str(args.chat_id),
+                                    "\n".join(req_lines),
+                                    build_access_request_buttons(user_id),
+                                )
                 continue
 
             if is_admin_chat and (text.startswith("/grantotp") or text.startswith("/bd")):
