@@ -782,6 +782,31 @@ def clear_recent_command_key(processed_file: str, command_key: str) -> None:
     save_recent_message_keys(processed_file, keys)
 
 
+def _get_pending_pick_id(item: Dict[str, Any]) -> str:
+    pick_id = str((item or {}).get("pick_index", "")).strip()
+    if pick_id:
+        return pick_id
+    return str((item or {}).get("index", "")).strip()
+
+
+def _get_next_pending_pick_id(pending: Dict[str, Any], chat_id: str) -> int:
+    max_pick_id = 0
+    prefix = f"{chat_id}:"
+    for bucket_key, bucket in pending.items():
+        if not str(bucket_key).startswith(prefix) or not isinstance(bucket, dict):
+            continue
+        items = bucket.get("items")
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            pick_id = _get_pending_pick_id(item)
+            if pick_id.isdigit():
+                max_pick_id = max(max_pick_id, int(pick_id))
+    return max_pick_id + 1
+
+
 def remember_qr_duplicate_names(
     pending_file: str,
     chat_id: str,
@@ -791,6 +816,23 @@ def remember_qr_duplicate_names(
     pending = load_pending_qr_renames(pending_file)
     bucket_key = f"{chat_id}:{user_id}"
     items: List[Dict[str, str]] = []
+    existing_bucket = pending.get(bucket_key)
+    next_pick_id = _get_next_pending_pick_id(pending, chat_id)
+
+    if isinstance(existing_bucket, dict):
+        existing_items = existing_bucket.get("items")
+        if isinstance(existing_items, list):
+            for item in existing_items:
+                if not isinstance(item, dict):
+                    continue
+                copied = dict(item)
+                pick_id = _get_pending_pick_id(copied)
+                if pick_id.isdigit():
+                    copied["pick_index"] = pick_id
+                else:
+                    copied["pick_index"] = str(next_pick_id)
+                    next_pick_id += 1
+                items.append(copied)
 
     for rec in duplicate_names:
         idx = str(rec.get("index", "")).strip()
@@ -801,10 +843,12 @@ def remember_qr_duplicate_names(
         items.append(
             {
                 "index": idx,
+                "pick_index": str(next_pick_id),
                 "account_cell": account_cell,
                 "secret": secret,
             }
         )
+        next_pick_id += 1
 
     pending[bucket_key] = {
         "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -831,7 +875,7 @@ def set_pending_qr_awaiting_index(
     picked_name = ""
     matched = False
     for item in items:
-        if str((item or {}).get("index", "")).strip() == idx_raw:
+        if _get_pending_pick_id(item or {}) == idx_raw:
             picked_name = str((item or {}).get("account_cell", "")).strip()
             matched = True
             break
@@ -848,7 +892,7 @@ def set_pending_qr_awaiting_index(
             if not isinstance(candidate_items, list) or not candidate_items:
                 continue
             for item in candidate_items:
-                if str((item or {}).get("index", "")).strip() == idx_raw:
+                if _get_pending_pick_id(item or {}) == idx_raw:
                     source_bucket = candidate_bucket
                     source_items = [i for i in candidate_items if isinstance(i, dict)]
                     picked_name = str((item or {}).get("account_cell", "")).strip()
@@ -913,7 +957,7 @@ def get_pending_qr_awaiting_item(
         return None
 
     for item in items:
-        idx = str((item or {}).get("index", "")).strip()
+        idx = _get_pending_pick_id(item or {})
         if idx == awaiting_index:
             return {
                 "index": idx,
@@ -929,22 +973,28 @@ def get_pending_qr_duplicates_for_user_or_chat(
 ) -> List[Dict[str, str]]:
     pending = load_pending_qr_renames(pending_file)
     preferred_key = f"{chat_id}:{user_id}"
+    prefix = f"{chat_id}:"
+    all_items: List[Dict[str, str]] = []
 
     preferred_bucket = pending.get(preferred_key)
     if isinstance(preferred_bucket, dict):
         preferred_items = preferred_bucket.get("items")
-        if isinstance(preferred_items, list) and preferred_items:
-            return [item for item in preferred_items if isinstance(item, dict)]
+        if isinstance(preferred_items, list):
+            all_items.extend(item for item in preferred_items if isinstance(item, dict))
 
-    prefix = f"{chat_id}:"
     for bucket_key, bucket in pending.items():
+        if str(bucket_key) == preferred_key:
+            continue
         if not str(bucket_key).startswith(prefix) or not isinstance(bucket, dict):
             continue
         items = bucket.get("items")
-        if isinstance(items, list) and items:
-            return [item for item in items if isinstance(item, dict)]
+        if isinstance(items, list):
+            all_items.extend(item for item in items if isinstance(item, dict))
 
-    return []
+    all_items.sort(
+        key=lambda item: int(_get_pending_pick_id(item)) if _get_pending_pick_id(item).isdigit() else 10**9
+    )
+    return all_items
 
 
 def build_pending_qr_duplicate_message(duplicate_names: List[Dict[str, str]]) -> str:
@@ -959,7 +1009,7 @@ def build_pending_qr_duplicate_message(duplicate_names: List[Dict[str, str]]) ->
     lines.append("")
     lines.append("Danh sách:")
     for rec in duplicate_names[:30]:
-        idx = str(rec.get("index", "")).strip()
+        idx = _get_pending_pick_id(rec)
         account_cell = str(rec.get("account_cell", "")).strip()
         if not idx:
             continue
@@ -1000,7 +1050,7 @@ def process_rename_qr_duplicate(
     source_bucket_key = bucket_key
     remain: List[Dict[str, str]] = []
     for item in items:
-        item_idx = str((item or {}).get("index", "")).strip()
+        item_idx = _get_pending_pick_id(item or {})
         if item_idx == idx_raw and target is None:
             target = item
         else:
@@ -1019,7 +1069,7 @@ def process_rename_qr_duplicate(
             candidate_target = None
             candidate_remain: List[Dict[str, str]] = []
             for item in candidate_items:
-                item_idx = str((item or {}).get("index", "")).strip()
+                item_idx = _get_pending_pick_id(item or {})
                 if item_idx == idx_raw and candidate_target is None:
                     candidate_target = item
                 else:
@@ -2013,7 +2063,7 @@ def build_qr_duplicate_buttons(duplicate_names: List[Dict[str, str]]) -> Optiona
 
     keyboard: List[List[Dict[str, str]]] = []
     for rec in duplicate_names[:20]:
-        idx = str(rec.get("index", "")).strip()
+        idx = _get_pending_pick_id(rec)
         account_cell = str(rec.get("account_cell", "")).strip()
         if not idx:
             continue
