@@ -429,32 +429,68 @@ def atomic_write_json(file_path: str, data: Any) -> None:
     os.replace(tmp_path, file_path)
 
 
-def load_permissions(permission_file: str) -> Dict[str, Dict[str, Dict[str, str]]]:
-    default_data = {"get": {}, "delete": {}}
-    if not os.path.exists(permission_file):
-        return default_data
-
-    data: Dict[str, Any]
-    try:
-        with open(permission_file, "r", encoding="utf-8") as f:
-            data = json.load(f)
-    except Exception:
-        backup_file = permission_file + ".bak"
-        try:
-            with open(backup_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            print(f"[WARN] Khôi phục quyền OTP từ backup: {backup_file}", flush=True)
-            save_permissions(permission_file, data)
-        except Exception:
-            return default_data
-
+def normalize_permission_data(data: Any) -> Dict[str, Dict[str, str]]:
     if not isinstance(data, dict):
-        return default_data
-
+        return {"get": {}, "delete": {}}
     return {
         "get": data.get("get", {}) if isinstance(data.get("get", {}), dict) else {},
         "delete": data.get("delete", {}) if isinstance(data.get("delete", {}), dict) else {},
     }
+
+
+def merge_permission_data(base_data: Dict[str, Dict[str, str]], extra_data: Dict[str, Dict[str, str]]) -> Dict[str, Dict[str, str]]:
+    merged = {
+        "get": dict(base_data.get("get", {})),
+        "delete": dict(base_data.get("delete", {})),
+    }
+    for action in ("get", "delete"):
+        for key, value in extra_data.get(action, {}).items():
+            key_str = str(key).strip()
+            value_str = str(value).strip()
+            if key_str and value_str and key_str not in merged[action]:
+                merged[action][key_str] = value_str
+    return merged
+
+
+def load_permissions(permission_file: str) -> Dict[str, Dict[str, Dict[str, str]]]:
+    default_data = {"get": {}, "delete": {}}
+    candidates: List[Tuple[str, bool]] = [
+        (permission_file, True),
+        (permission_file + ".bak", True),
+    ]
+
+    local_file = os.path.basename(permission_file)
+    for extra_path in [local_file, local_file + ".bak"]:
+        if extra_path not in {path for path, _ in candidates}:
+            candidates.append((extra_path, False))
+
+    recovered = default_data
+    recovered_from: List[str] = []
+    for candidate_path, should_heal in candidates:
+        if not os.path.exists(candidate_path):
+            continue
+        try:
+            with open(candidate_path, "r", encoding="utf-8") as f:
+                raw_data = json.load(f)
+        except Exception:
+            continue
+
+        normalized = normalize_permission_data(raw_data)
+        if not normalized.get("get") and not normalized.get("delete"):
+            continue
+
+        recovered = merge_permission_data(recovered, normalized)
+        recovered_from.append(candidate_path)
+
+        if should_heal and candidate_path != permission_file:
+            print(f"[WARN] Khôi phục quyền OTP từ {candidate_path}", flush=True)
+
+    if recovered_from and not os.path.exists(permission_file):
+        save_permissions(permission_file, recovered)
+    elif recovered_from and permission_file not in recovered_from:
+        save_permissions(permission_file, recovered)
+
+    return recovered
 
 
 def save_permissions(permission_file: str, data: Dict[str, Dict[str, Dict[str, str]]]) -> None:
@@ -2422,6 +2458,11 @@ def main() -> int:
         print(f"☁️ Google Sheet: {args.google_sheet_id} | tab={args.google_sheet_name}")
     else:
         print("☁️ Google Sheet: chưa cấu hình (bỏ qua đồng bộ)")
+    permission_snapshot = load_permissions(args.permission_file)
+    print(
+        f"🔐 Quyền OTP đã nạp: get={len(permission_snapshot.get('get', {}))}, delete={len(permission_snapshot.get('delete', {}))} | file={args.permission_file}",
+        flush=True,
+    )
 
     while True:
         now_ts = time.time()
