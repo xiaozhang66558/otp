@@ -3234,7 +3234,11 @@ def main() -> int:
                         args.google_service_account_file,
                     )
                     print(f"☁️ Pre-write restore: {'OK' if restore_ok else 'FAIL'} | {restore_msg}", flush=True)
+                    if not restore_ok:
+                        send_message(args.bot_token, message_chat_id, f"❌ Lỗi đọc Google Sheet trước khi add: {restore_msg}")
+                        continue
                 report_text, ok = process_addotp(text, args.wps_file)
+                print(f"🧾 /addotp parsed result: ok={ok}", flush=True)
                 if ok:
                     sync_ok, sync_msg = maybe_sync_google_sheet(
                         args.wps_file,
@@ -3243,11 +3247,22 @@ def main() -> int:
                         args.google_service_account_json,
                         args.google_service_account_file,
                     )
+                    print(f"☁️ /addotp sync result: {'OK' if sync_ok else 'FAIL'} | {sync_msg}", flush=True)
                     report_text = f"{report_text}\n\n☁️ Google Sheets: {'✅ ' if sync_ok else '❌ '}{sync_msg}"
-                send_message(args.bot_token, message_chat_id, report_text)
+                sent_ok = send_message(args.bot_token, message_chat_id, report_text)
+                print(f"📨 /addotp send report: {'OK' if sent_ok else 'FAIL'}", flush=True)
+                if not sent_ok:
+                    send_message(
+                        args.bot_token,
+                        message_chat_id,
+                        "❌ Không gửi được báo cáo /addotp (Telegram API lỗi tạm thời).",
+                    )
                 if ok:
                     caption = f"Cập nhật OTP lúc {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-                    send_document(args.bot_token, message_chat_id, args.wps_file, caption)
+                    doc_ok = send_document(args.bot_token, message_chat_id, args.wps_file, caption)
+                    print(f"📎 /addotp send document: {'OK' if doc_ok else 'FAIL'}", flush=True)
+                    if not doc_ok:
+                        send_message(args.bot_token, message_chat_id, "⚠️ Đã cập nhật nhưng gửi file CSV thất bại.")
                 continue
 
             if is_admin_chat and text.startswith("/c"):
