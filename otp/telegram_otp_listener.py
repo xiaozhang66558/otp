@@ -773,6 +773,37 @@ def set_pending_qr_awaiting_index(
             break
 
     if not matched:
+        # Fallback: allow selecting duplicate item prepared by another admin in same chat.
+        prefix = f"{chat_id}:"
+        source_bucket = None
+        source_items: List[Dict[str, str]] = []
+        for candidate_bucket_key, candidate_bucket in pending.items():
+            if not str(candidate_bucket_key).startswith(prefix) or not isinstance(candidate_bucket, dict):
+                continue
+            candidate_items = candidate_bucket.get("items")
+            if not isinstance(candidate_items, list) or not candidate_items:
+                continue
+            for item in candidate_items:
+                if str((item or {}).get("index", "")).strip() == idx_raw:
+                    source_bucket = candidate_bucket
+                    source_items = [i for i in candidate_items if isinstance(i, dict)]
+                    picked_name = str((item or {}).get("account_cell", "")).strip()
+                    matched = True
+                    break
+            if matched:
+                break
+
+        if matched and source_bucket is not None:
+            bucket = {
+                "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "items": source_items,
+                "awaiting_index": idx_raw,
+            }
+            pending[bucket_key] = bucket
+            save_pending_qr_renames(pending_file, pending)
+            return True, picked_name
+
+    if not matched:
         return False, f"Không tìm thấy mã thứ {idx_raw}"
 
     bucket["awaiting_index"] = idx_raw
@@ -827,6 +858,51 @@ def get_pending_qr_awaiting_item(
     return None
 
 
+def get_pending_qr_duplicates_for_user_or_chat(
+    pending_file: str,
+    chat_id: str,
+    user_id: str,
+) -> List[Dict[str, str]]:
+    pending = load_pending_qr_renames(pending_file)
+    preferred_key = f"{chat_id}:{user_id}"
+
+    preferred_bucket = pending.get(preferred_key)
+    if isinstance(preferred_bucket, dict):
+        preferred_items = preferred_bucket.get("items")
+        if isinstance(preferred_items, list) and preferred_items:
+            return [item for item in preferred_items if isinstance(item, dict)]
+
+    prefix = f"{chat_id}:"
+    for bucket_key, bucket in pending.items():
+        if not str(bucket_key).startswith(prefix) or not isinstance(bucket, dict):
+            continue
+        items = bucket.get("items")
+        if isinstance(items, list) and items:
+            return [item for item in items if isinstance(item, dict)]
+
+    return []
+
+
+def build_pending_qr_duplicate_message(duplicate_names: List[Dict[str, str]]) -> str:
+    if not duplicate_names:
+        return "📭 Không có OTP trùng tên đang chờ đổi"
+
+    lines: List[str] = []
+    lines.append("🛠 Danh sách OTP trùng tên đang chờ đổi")
+    lines.append(f"- Tổng: {len(duplicate_names)}")
+    lines.append("- Bấm nút để chọn OTP cần đổi tên")
+    lines.append("- Sau đó gửi trực tiếp tên mới vào nhóm")
+    lines.append("")
+    lines.append("Danh sách:")
+    for rec in duplicate_names[:30]:
+        idx = str(rec.get("index", "")).strip()
+        account_cell = str(rec.get("account_cell", "")).strip()
+        if not idx:
+            continue
+        lines.append(f"- Mã thứ {idx}: {account_cell or '(không có tên)'}")
+    return "\n".join(lines)
+
+
 def process_rename_qr_duplicate(
     text: str,
     csv_path: str,
@@ -857,6 +933,7 @@ def process_rename_qr_duplicate(
         return "❌ Không có OTP trùng tên đang chờ đổi. Gửi QR lại rồi thử /renqr", False
 
     target = None
+    source_bucket_key = bucket_key
     remain: List[Dict[str, str]] = []
     for item in items:
         item_idx = str((item or {}).get("index", "")).strip()
@@ -864,6 +941,31 @@ def process_rename_qr_duplicate(
             target = item
         else:
             remain.append(item)
+
+    if not target:
+        # Fallback: cho phép admin khác trong cùng chat tiếp tục xử lý danh sách trùng tên.
+        prefix = f"{chat_id}:"
+        for candidate_bucket_key, candidate_bucket in pending.items():
+            if not str(candidate_bucket_key).startswith(prefix) or not isinstance(candidate_bucket, dict):
+                continue
+            candidate_items = candidate_bucket.get("items")
+            if not isinstance(candidate_items, list) or not candidate_items:
+                continue
+
+            candidate_target = None
+            candidate_remain: List[Dict[str, str]] = []
+            for item in candidate_items:
+                item_idx = str((item or {}).get("index", "")).strip()
+                if item_idx == idx_raw and candidate_target is None:
+                    candidate_target = item
+                else:
+                    candidate_remain.append(item)
+
+            if candidate_target is not None:
+                target = candidate_target
+                remain = candidate_remain
+                source_bucket_key = str(candidate_bucket_key)
+                break
 
     if not target:
         return f"❌ Không tìm thấy mã thứ {idx_raw} trong danh sách trùng tên đang chờ đổi", False
@@ -892,13 +994,13 @@ def process_rename_qr_duplicate(
     )
 
     if remain:
-        pending[bucket_key] = {
+        pending[source_bucket_key] = {
             "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "items": remain,
             "awaiting_index": "",
         }
     else:
-        pending.pop(bucket_key, None)
+        pending.pop(source_bucket_key, None)
     save_pending_qr_renames(pending_file, pending)
 
     lines = [
@@ -1539,6 +1641,7 @@ def build_help() -> str:
         "- ls hoặc /ls: gửi file OTP mới nhất\n"
         "- Gửi ảnh QR migration: tự đọc OTP và thêm vào file\n\n"
         "- /renqr stt|ten_moi: lưu OTP đang trùng tên sau khi đổi tên\n\n"
+        "- /cf: hiện lại danh sách OTP trùng tên đang chờ đổi (kèm nút chọn)\n\n"
         "📘 Nhóm nhân viên:\n"
         "- /myid\n"
         "- /getotp keyword\n"
@@ -2621,6 +2724,18 @@ def main() -> int:
                 if ok:
                     caption = f"Đổi tên OTP trùng từ QR lúc {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
                     send_document(args.bot_token, message_chat_id, args.wps_file, caption)
+                    remain_duplicates = get_pending_qr_duplicates_for_user_or_chat(
+                        args.pending_file,
+                        message_chat_id,
+                        str(user.get("id", "")),
+                    )
+                    if remain_duplicates:
+                        send_message(
+                            args.bot_token,
+                            message_chat_id,
+                            build_pending_qr_duplicate_message(remain_duplicates),
+                            build_qr_duplicate_buttons(remain_duplicates),
+                        )
                 continue
 
             # Kiểm tra tin nhắn text
@@ -2672,10 +2787,36 @@ def main() -> int:
                     if ok:
                         caption = f"Đổi tên OTP trùng từ QR lúc {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
                         send_document(args.bot_token, message_chat_id, args.wps_file, caption)
+                        remain_duplicates = get_pending_qr_duplicates_for_user_or_chat(
+                            args.pending_file,
+                            message_chat_id,
+                            str(user.get("id", "")),
+                        )
+                        if remain_duplicates:
+                            send_message(
+                                args.bot_token,
+                                message_chat_id,
+                                build_pending_qr_duplicate_message(remain_duplicates),
+                                build_qr_duplicate_buttons(remain_duplicates),
+                            )
                     continue
 
             if text.startswith("/helpotp") or text.startswith("/help"):
                 send_message(args.bot_token, message_chat_id, build_help())
+                continue
+
+            if is_admin_chat and text.strip().lower() in {"/cf", "cf"}:
+                duplicate_items = get_pending_qr_duplicates_for_user_or_chat(
+                    args.pending_file,
+                    message_chat_id,
+                    str(user.get("id", "")),
+                )
+                send_message(
+                    args.bot_token,
+                    message_chat_id,
+                    build_pending_qr_duplicate_message(duplicate_items),
+                    build_qr_duplicate_buttons(duplicate_items),
+                )
                 continue
 
             if text.startswith("/myid"):
