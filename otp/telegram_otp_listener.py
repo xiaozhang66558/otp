@@ -2312,6 +2312,9 @@ def _qr_photo_worker(
             send_message(bot_token, message_chat_id, f"❌ Lỗi xử lý QR: {e}")
         except Exception:
             pass
+
+
+def parse_args():
     parser = argparse.ArgumentParser(description="Listen OTP commands from Telegram groups")
     data_dir = os.environ.get("DATA_DIR", "")
     default_permission_file = os.path.join(data_dir, "telegram_permissions.json") if data_dir else "telegram_permissions.json"
