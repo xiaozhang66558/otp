@@ -413,15 +413,37 @@ def force_restore_csv_from_google_sheet(
     return True, f"Đã nạp {len(rebuilt_rows)} dòng từ Google Sheet"
 
 
-def load_permissions(permission_file: str) -> Dict[str, Dict[str, Dict[str, str]]]:
-    if not os.path.exists(permission_file):
-        return {"get": {}, "delete": {}}
+def atomic_write_json(file_path: str, data: Any) -> None:
+    os.makedirs(os.path.dirname(os.path.abspath(file_path)), exist_ok=True)
+    tmp_path = f"{file_path}.tmp.{os.getpid()}.{int(time.time() * 1000)}"
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2, sort_keys=True)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp_path, file_path)
 
+
+def load_permissions(permission_file: str) -> Dict[str, Dict[str, Dict[str, str]]]:
+    default_data = {"get": {}, "delete": {}}
+    if not os.path.exists(permission_file):
+        return default_data
+
+    data: Dict[str, Any]
     try:
         with open(permission_file, "r", encoding="utf-8") as f:
             data = json.load(f)
     except Exception:
-        return {"get": {}, "delete": {}}
+        backup_file = permission_file + ".bak"
+        try:
+            with open(backup_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            print(f"[WARN] Khôi phục quyền OTP từ backup: {backup_file}", flush=True)
+            save_permissions(permission_file, data)
+        except Exception:
+            return default_data
+
+    if not isinstance(data, dict):
+        return default_data
 
     return {
         "get": data.get("get", {}) if isinstance(data.get("get", {}), dict) else {},
@@ -430,8 +452,33 @@ def load_permissions(permission_file: str) -> Dict[str, Dict[str, Dict[str, str]
 
 
 def save_permissions(permission_file: str, data: Dict[str, Dict[str, Dict[str, str]]]) -> None:
-    with open(permission_file, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2, sort_keys=True)
+    backup_file = permission_file + ".bak"
+    lock_path = permission_file + ".lock"
+    os.makedirs(os.path.dirname(os.path.abspath(permission_file)), exist_ok=True)
+
+    lock_handle = open(lock_path, "a")
+    try:
+        try:
+            import fcntl
+
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+        except Exception:
+            pass
+
+        if os.path.exists(permission_file):
+            try:
+                shutil.copyfile(permission_file, backup_file)
+            except Exception:
+                pass
+        atomic_write_json(permission_file, data)
+    finally:
+        try:
+            import fcntl
+
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+        except Exception:
+            pass
+        lock_handle.close()
 
 
 def load_pending_qr_renames(pending_file: str) -> Dict[str, Dict[str, Any]]:
@@ -447,8 +494,7 @@ def load_pending_qr_renames(pending_file: str) -> Dict[str, Dict[str, Any]]:
 
 
 def save_pending_qr_renames(pending_file: str, data: Dict[str, Dict[str, Any]]) -> None:
-    with open(pending_file, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2, sort_keys=True)
+    atomic_write_json(pending_file, data)
 
 
 def load_processed_update_ids(processed_file: str) -> List[int]:
@@ -474,8 +520,7 @@ def load_processed_update_ids(processed_file: str) -> List[int]:
 
 
 def save_processed_update_ids(processed_file: str, ids: List[int]) -> None:
-    with open(processed_file, "w", encoding="utf-8") as f:
-        json.dump({"ids": ids}, f, ensure_ascii=False, indent=2)
+    atomic_write_json(processed_file, {"ids": ids})
 
 
 def is_update_already_processed(processed_file: str, update_id: int) -> bool:
@@ -584,8 +629,7 @@ def load_recent_message_keys(processed_file: str) -> Dict[str, int]:
 
 
 def save_recent_message_keys(processed_file: str, keys: Dict[str, int]) -> None:
-    with open(processed_file, "w", encoding="utf-8") as f:
-        json.dump(keys, f, ensure_ascii=False, indent=2, sort_keys=True)
+    atomic_write_json(processed_file, keys)
 
 
 def is_recent_message_duplicate(processed_file: str, message_key: str, now_ts: int, ttl_seconds: int = 180) -> bool:
@@ -2095,12 +2139,14 @@ def process_qr_photo(bot_token: str, msg: Dict, csv_path: str) -> Tuple[str, boo
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Listen OTP commands from Telegram groups")
+    data_dir = os.environ.get("DATA_DIR", "")
+    default_permission_file = os.path.join(data_dir, "telegram_permissions.json") if data_dir else "telegram_permissions.json"
     parser.add_argument("--bot-token", default=os.environ.get("TELEGRAM_BOT_TOKEN", ""))
     parser.add_argument("--chat-id", default=os.environ.get("TELEGRAM_CHAT_ID", ""))
     parser.add_argument("--employee-chat-id", default=os.environ.get("EMPLOYEE_TELEGRAM_CHAT_ID", "-1003820328844"))
     parser.add_argument("--wps-file", default="otp_wps.csv")
     parser.add_argument("--offset-file", default="telegram_offset.txt")
-    parser.add_argument("--permission-file", default="telegram_permissions.json")
+    parser.add_argument("--permission-file", default=os.environ.get("TELEGRAM_PERMISSION_FILE", default_permission_file))
     parser.add_argument("--pending-file", default=os.environ.get("TELEGRAM_QR_PENDING_FILE", "telegram_qr_pending.json"))
     parser.add_argument("--processed-updates-file", default=os.environ.get("TELEGRAM_PROCESSED_UPDATES_FILE", "telegram_processed_updates.json"))
     parser.add_argument("--processed-messages-file", default=os.environ.get("TELEGRAM_PROCESSED_MESSAGES_FILE", "telegram_processed_messages.json"))
