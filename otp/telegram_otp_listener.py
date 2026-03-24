@@ -2190,10 +2190,27 @@ def build_access_request_buttons(user_id: str) -> Dict:
     }
 
 
-def grant_get_permission_for_user_id(permission_file: str, user_id: str) -> None:
+def extract_username_from_access_request_text(text: str) -> str:
+    for raw_line in str(text or "").splitlines():
+        line = raw_line.strip()
+        if not line.lower().startswith("username:"):
+            continue
+        value = line.split(":", 1)[1].strip() if ":" in line else ""
+        if value.startswith("@"):
+            value = value[1:]
+        value = value.strip().lower()
+        if value and value != "(không có)":
+            return value
+    return ""
+
+
+def grant_get_permission_for_user(permission_file: str, user_id: str, username: str = "") -> None:
     permission_data = load_permissions(permission_file)
     key = f"id:{user_id}"
     permission_data.setdefault("get", {})[key] = user_id
+    username = str(username or "").strip().lower().lstrip("@")
+    if username:
+        permission_data.setdefault("get", {})[f"username:{username}"] = f"@{username}"
     save_permissions(permission_file, permission_data)
 
 
@@ -2642,7 +2659,18 @@ def main() -> int:
                     )
 
                     if action == "reqok":
-                        grant_get_permission_for_user_id(args.permission_file, user_id)
+                        request_username = extract_username_from_access_request_text(callback_text)
+                        grant_get_permission_for_user(args.permission_file, user_id, request_username)
+                        verify_permission = load_permissions(args.permission_file)
+                        verify_get = verify_permission.get("get", {})
+                        if f"id:{user_id}" not in verify_get:
+                            answer_callback_query(args.bot_token, callback_id, "Lưu quyền thất bại, thử lại")
+                            send_message(
+                                args.bot_token,
+                                callback_chat_id,
+                                f"❌ Không lưu được quyền cho user_id {user_id}. Kiểm tra file quyền và thử lại.",
+                            )
+                            continue
                         result_text = f"✅ Đã chấp thuận quyền lấy OTP cho user_id {user_id}"
                         edit_message_text(
                             args.bot_token,
