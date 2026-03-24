@@ -46,6 +46,22 @@ OUTBOUND_DEDUPE_TTL_SECONDS = 10
 
 # Module-level lock serialises concurrent CSV read-modify-write from QR worker threads.
 _csv_rw_lock = threading.Lock()
+_qr_jobs_lock = threading.Lock()
+_qr_jobs_inflight = 0
+
+
+def begin_qr_job() -> int:
+    global _qr_jobs_inflight
+    with _qr_jobs_lock:
+        _qr_jobs_inflight += 1
+        return _qr_jobs_inflight
+
+
+def finish_qr_job() -> int:
+    global _qr_jobs_inflight
+    with _qr_jobs_lock:
+        _qr_jobs_inflight = max(_qr_jobs_inflight - 1, 0)
+        return _qr_jobs_inflight
 
 
 def configure_outbound_dedupe(file_path: str, ttl_seconds: int = 10) -> None:
@@ -2348,20 +2364,29 @@ def _qr_photo_worker(
                 ]
                 report_text = report_text + "\n" + "\n".join(tips)
 
-        if ok and google_sheet_id:
-            sync_ok, sync_msg = maybe_sync_google_sheet(
-                wps_file,
-                google_sheet_id,
-                google_sheet_name,
-                google_service_account_json,
-                google_service_account_file,
-            )
-            report_text = f"{report_text}\n\n☁️ Google Sheets: {'✅ ' if sync_ok else '❌ '}{sync_msg}"
-
         print(f"[QR_WORKER] Gửi kết quả về {message_chat_id}: ok={ok}", flush=True)
         duplicate_buttons = build_qr_duplicate_buttons(duplicate_names) if (ok and duplicate_names) else None
+        remaining_jobs = finish_qr_job()
+        should_flush_qr_batch = ok and remaining_jobs == 0
+
+        if ok and google_sheet_id:
+            if should_flush_qr_batch:
+                sync_ok, sync_msg = maybe_sync_google_sheet(
+                    wps_file,
+                    google_sheet_id,
+                    google_sheet_name,
+                    google_service_account_json,
+                    google_service_account_file,
+                )
+                report_text = f"{report_text}\n\n☁️ Google Sheets: {'✅ ' if sync_ok else '❌ '}{sync_msg}"
+            else:
+                report_text = (
+                    f"{report_text}\n\n"
+                    f"⏳ Còn {remaining_jobs} ảnh QR đang xếp hàng, sẽ đồng bộ Google Sheets sau khi xử lý xong đợt này"
+                )
+
         send_message(bot_token, message_chat_id, report_text, duplicate_buttons)
-        if ok:
+        if should_flush_qr_batch:
             caption = f"Cập nhật OTP từ QR lúc {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
             send_document(bot_token, message_chat_id, wps_file, caption)
     except Exception as e:
@@ -2371,6 +2396,7 @@ def _qr_photo_worker(
             send_message(bot_token, message_chat_id, f"❌ Lỗi xử lý QR: {e}")
         except Exception:
             pass
+        finish_qr_job()
 
 
 def parse_args():
@@ -2453,7 +2479,7 @@ def main() -> int:
     # main poll loop is never blocked downloading/decoding images.  CSV writes in
     # each worker are already serialised by _csv_rw_lock.
     _photo_pool = concurrent.futures.ThreadPoolExecutor(
-        max_workers=4, thread_name_prefix="qr_worker"
+        max_workers=6, thread_name_prefix="qr_worker"
     )
 
     if not args.bot_token or not args.chat_id or not args.employee_chat_id:
@@ -2807,7 +2833,11 @@ def main() -> int:
 
             # Nhóm admin: xử lý ảnh QR trước tiên
             if is_admin_chat and msg.get("photo"):
-                print(f"[MAIN] Ảnh QR nhận từ {message_chat_id}, submit vào worker pool (không chặn poll)", flush=True)
+                queued_jobs = begin_qr_job()
+                print(
+                    f"[MAIN] Ảnh QR nhận từ {message_chat_id}, submit vào worker pool (không chặn poll) | queue={queued_jobs}",
+                    flush=True,
+                )
                 _photo_pool.submit(
                     _qr_photo_worker,
                     args.bot_token,
