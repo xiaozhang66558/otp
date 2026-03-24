@@ -2910,6 +2910,17 @@ def main() -> int:
             )
 
             if not is_admin_chat and not is_employee_chat:
+                text_lower = text.strip().lower()
+                if text and text_lower in {"/myid", "/help", "/helpotp", "/ping", "ping", "/statusotp"}:
+                    send_message(
+                        args.bot_token,
+                        message_chat_id,
+                        "⚠️ Nhóm này chưa được cấu hình cho OTP bot.\n"
+                        f"- Chat hiện tại: {message_chat_id}\n"
+                        f"- Chat admin: {args.chat_id}\n"
+                        f"- Chat nhân viên: {args.employee_chat_id}\n"
+                        "Liên hệ admin để cập nhật TELEGRAM_CHAT_ID / EMPLOYEE_TELEGRAM_CHAT_ID.",
+                    )
                 print(f"[SKIP] Chat ID không match, bỏ qua", flush=True)
                 continue
 
@@ -2981,6 +2992,21 @@ def main() -> int:
 
             # Kiểm tra tin nhắn text
             if not text:
+                continue
+
+            text_lower = text.strip().lower()
+
+            if text_lower in {"/ping", "ping", "/statusotp"}:
+                role = "admin" if is_admin_chat else "employee"
+                send_message(
+                    args.bot_token,
+                    message_chat_id,
+                    "✅ OTP bot vẫn đang chạy\n"
+                    f"- Chat role: {role}\n"
+                    f"- Chat ID: {message_chat_id}\n"
+                    f"- Offset hiện tại: {offset}\n"
+                    f"- Thời gian server: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+                )
                 continue
 
             # Keep command dedupe marker only for diagnostics; do not block execution.
@@ -3320,6 +3346,15 @@ def main() -> int:
                 if ok:
                     caption = f"Đã xoá OTP lúc {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
                     send_document(args.bot_token, message_chat_id, args.wps_file, caption)
+                continue
+
+            if text.startswith("/"):
+                send_message(
+                    args.bot_token,
+                    message_chat_id,
+                    "❓ Lệnh chưa được hỗ trợ. Gõ /helpotp để xem danh sách lệnh.",
+                )
+                continue
 
         save_offset(args.offset_file, offset)
 
