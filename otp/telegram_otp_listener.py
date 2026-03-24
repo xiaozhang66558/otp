@@ -454,13 +454,19 @@ def merge_permission_data(base_data: Dict[str, Dict[str, str]], extra_data: Dict
 
 def load_permissions(permission_file: str) -> Dict[str, Dict[str, Dict[str, str]]]:
     default_data = {"get": {}, "delete": {}}
+    app_dir = os.path.dirname(os.path.abspath(__file__))
     candidates: List[Tuple[str, bool]] = [
         (permission_file, True),
         (permission_file + ".bak", True),
     ]
 
     local_file = os.path.basename(permission_file)
-    for extra_path in [local_file, local_file + ".bak"]:
+    for extra_path in [
+        os.path.join(app_dir, local_file),
+        os.path.join(app_dir, local_file + ".bak"),
+        local_file,
+        local_file + ".bak",
+    ]:
         if extra_path not in {path for path, _ in candidates}:
             candidates.append((extra_path, False))
 
