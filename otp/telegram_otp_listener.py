@@ -418,7 +418,12 @@ def force_restore_csv_from_google_sheet(
     if not ok:
         return False, err
     if not values:
-        return True, "Google Sheet đang trống"
+        local_header, _ = load_csv_rows(csv_path)
+        if not local_header:
+            local_header = ["Account", "Secret", "FirstSeen", "Key"]
+        os.makedirs(os.path.dirname(csv_path) or ".", exist_ok=True)
+        save_csv_rows(csv_path, local_header, [])
+        return True, "Google Sheet đang trống (đã xoá dữ liệu local)"
 
     header = [str(col).strip() for col in values[0]]
     if not header:
@@ -2651,6 +2656,19 @@ def main() -> int:
                         answer_callback_query(args.bot_token, callback_id, "Không đọc được từ khoá để làm mới")
                         continue
 
+                    if args.google_sheet_id:
+                        restore_ok, restore_msg = force_restore_csv_from_google_sheet(
+                            args.wps_file,
+                            args.google_sheet_id,
+                            args.google_sheet_name,
+                            args.google_service_account_json,
+                            args.google_service_account_file,
+                        )
+                        print(f"☁️ Pre-getotp(refresh) restore: {'OK' if restore_ok else 'FAIL'} | {restore_msg}", flush=True)
+                        if not restore_ok:
+                            answer_callback_query(args.bot_token, callback_id, "Lỗi đọc Google Sheet, thử lại sau")
+                            continue
+
                     refreshed_text, ok = process_getotp(f"/getotp {query}", args.wps_file)
                     if ok:
                         history_lines = extract_refresh_history_lines(callback_text)
@@ -2695,6 +2713,20 @@ def main() -> int:
                         continue
 
                     chosen_account = choices[pick_idx]
+
+                    if args.google_sheet_id:
+                        restore_ok, restore_msg = force_restore_csv_from_google_sheet(
+                            args.wps_file,
+                            args.google_sheet_id,
+                            args.google_sheet_name,
+                            args.google_service_account_json,
+                            args.google_service_account_file,
+                        )
+                        print(f"☁️ Pre-getotp(pick) restore: {'OK' if restore_ok else 'FAIL'} | {restore_msg}", flush=True)
+                        if not restore_ok:
+                            answer_callback_query(args.bot_token, callback_id, "Lỗi đọc Google Sheet, thử lại sau")
+                            continue
+
                     selected_text, ok = process_getotp_query(chosen_account, args.wps_file)
                     if ok:
                         edit_message_text(
@@ -3108,6 +3140,9 @@ def main() -> int:
                         args.google_service_account_file,
                     )
                     print(f"☁️ Pre-read restore: {'OK' if restore_ok else 'FAIL'} | {restore_msg}", flush=True)
+                    if not restore_ok:
+                        send_message(args.bot_token, message_chat_id, f"❌ Lỗi đọc Google Sheet trước khi gửi ls: {restore_msg}")
+                        continue
                 caption = f"📄 File OTP mới nhất lúc {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
                 ok = send_document(args.bot_token, message_chat_id, args.wps_file, caption)
                 if not ok:
@@ -3144,6 +3179,18 @@ def main() -> int:
                 if not user_has_permission(permission_data, "get", user):
                     send_message(args.bot_token, message_chat_id, "❌ Bạn chưa được cấp quyền lấy OTP. Gửi /myid rồi nhờ admin cấp quyền.")
                     continue
+                if args.google_sheet_id:
+                    restore_ok, restore_msg = force_restore_csv_from_google_sheet(
+                        args.wps_file,
+                        args.google_sheet_id,
+                        args.google_sheet_name,
+                        args.google_service_account_json,
+                        args.google_service_account_file,
+                    )
+                    print(f"☁️ Pre-getotp(command) restore: {'OK' if restore_ok else 'FAIL'} | {restore_msg}", flush=True)
+                    if not restore_ok:
+                        send_message(args.bot_token, message_chat_id, f"❌ Lỗi đọc Google Sheet trước khi lấy OTP: {restore_msg}")
+                        continue
                 report_text, ok = process_getotp(text, args.wps_file)
                 reply_markup = build_getotp_reply_markup(report_text) if ok else None
                 if ok:
@@ -3157,6 +3204,18 @@ def main() -> int:
                 if not user_has_permission(permission_data, "get", user):
                     send_message(args.bot_token, message_chat_id, "❌ Bạn chưa được cấp quyền lấy OTP. Gửi /myid rồi nhờ admin cấp quyền.")
                     continue
+                if args.google_sheet_id:
+                    restore_ok, restore_msg = force_restore_csv_from_google_sheet(
+                        args.wps_file,
+                        args.google_sheet_id,
+                        args.google_sheet_name,
+                        args.google_service_account_json,
+                        args.google_service_account_file,
+                    )
+                    print(f"☁️ Pre-getotp(text) restore: {'OK' if restore_ok else 'FAIL'} | {restore_msg}", flush=True)
+                    if not restore_ok:
+                        send_message(args.bot_token, message_chat_id, f"❌ Lỗi đọc Google Sheet trước khi lấy OTP: {restore_msg}")
+                        continue
                 report_text, ok = process_getotp_query(text, args.wps_file)
                 reply_markup = build_getotp_reply_markup(report_text) if ok else None
                 if ok:
