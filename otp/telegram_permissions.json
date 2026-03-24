@@ -1,0 +1,10 @@
+{
+  "delete": {
+    "username:username_or_userid": "@username_or_userid"
+  },
+  "get": {
+    "id:6597217794": "6597217794",
+    "id:8424807363": "8424807363",
+    "username:username_or_userid": "@username_or_userid"
+  }
+}

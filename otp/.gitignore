@@ -10,7 +10,6 @@ listener.log
 otp_wps.csv
 otp_data.csv
 otp_latest.csv
-telegram_permissions.json
 telegram_offset.txt
 
 # Local images and profiles
