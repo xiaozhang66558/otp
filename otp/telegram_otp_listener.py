@@ -18,6 +18,7 @@ Optional:
 
 import argparse
 import base64
+import concurrent.futures
 import csv
 import errno
 import hmac
@@ -25,9 +26,11 @@ import hashlib
 import json
 import os
 import random
+import shutil
 import ssl
 import struct
 import string
+import threading
 import time
 import tempfile
 import traceback
@@ -40,6 +43,9 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 OUTBOUND_DEDUPE_FILE = ""
 OUTBOUND_DEDUPE_TTL_SECONDS = 10
+
+# Module-level lock serialises concurrent CSV read-modify-write from QR worker threads.
+_csv_rw_lock = threading.Lock()
 
 
 def configure_outbound_dedupe(file_path: str, ttl_seconds: int = 10) -> None:
@@ -2178,29 +2184,32 @@ def process_qr_photo(bot_token: str, msg: Dict, csv_path: str) -> Tuple[str, boo
         if not otp_rows:
             return "❌ Ảnh không có QR OTP hợp lệ (hỗ trợ otpauth-migration và otpauth://totp)", False, []
 
-        existing_keys = load_existing_keys(csv_path)
-        existing_names = load_existing_account_names(csv_path)
-        new_rows: List[Dict[str, str]] = []
-        duplicates: List[Dict[str, str]] = []
-        duplicate_names: List[Dict[str, str]] = []
+        # Phase 2 — serialised under lock so concurrent QR workers never produce
+        # duplicate CSV rows when multiple images are processed simultaneously.
+        with _csv_rw_lock:
+            existing_keys = load_existing_keys(csv_path)
+            existing_names = load_existing_account_names(csv_path)
+            new_rows: List[Dict[str, str]] = []
+            duplicates: List[Dict[str, str]] = []
+            duplicate_names: List[Dict[str, str]] = []
 
-        for idx, rec in enumerate(otp_rows, 1):
-            rec["index"] = str(idx)
-            account_cell = build_account_cell(rec.get("account", ""), rec.get("issuer", "")).strip()
-            account_key = account_cell.lower()
-            if rec["key"] in existing_keys:
-                duplicates.append(rec)
-            elif account_key in existing_names:
-                rec["account_cell"] = account_cell
-                duplicate_names.append(rec)
-            else:
-                new_rows.append(rec)
-                existing_keys.add(rec["key"])
-                if account_key:
-                    existing_names.add(account_key)
+            for idx, rec in enumerate(otp_rows, 1):
+                rec["index"] = str(idx)
+                account_cell = build_account_cell(rec.get("account", ""), rec.get("issuer", "")).strip()
+                account_key = account_cell.lower()
+                if rec["key"] in existing_keys:
+                    duplicates.append(rec)
+                elif account_key in existing_names:
+                    rec["account_cell"] = account_cell
+                    duplicate_names.append(rec)
+                else:
+                    new_rows.append(rec)
+                    existing_keys.add(rec["key"])
+                    if account_key:
+                        existing_names.add(account_key)
 
-        if new_rows:
-            append_rows(csv_path, new_rows)
+            if new_rows:
+                append_rows(csv_path, new_rows)
 
         lines: List[str] = []
         lines.append("📷 Kết quả đọc QR OTP từ nhóm")
@@ -2240,7 +2249,69 @@ def process_qr_photo(bot_token: str, msg: Dict, csv_path: str) -> Tuple[str, boo
                 pass
 
 
-def parse_args():
+def _qr_photo_worker(
+    bot_token: str,
+    msg: Dict,
+    wps_file: str,
+    pending_file: str,
+    message_chat_id: str,
+    user_id_str: str,
+    google_sheet_id: str,
+    google_sheet_name: str,
+    google_service_account_json: str,
+    google_service_account_file: str,
+) -> None:
+    """Background thread: process one QR photo message and send result back.
+
+    The heavy work (download + OpenCV decode) runs concurrently with other
+    workers. The CSV write phase is already serialised inside process_qr_photo
+    via _csv_rw_lock, so results are always consistent even when dozens of
+    images arrive at once.
+    """
+    try:
+        print(f"[QR_WORKER] Bắt đầu xử lý ảnh QR cho {message_chat_id}", flush=True)
+        report_text, ok, duplicate_names = process_qr_photo(bot_token, msg, wps_file)
+
+        if ok and duplicate_names:
+            pending_count = remember_qr_duplicate_names(
+                pending_file,
+                message_chat_id,
+                user_id_str,
+                duplicate_names,
+            )
+            if pending_count:
+                tips: List[str] = [
+                    "",
+                    "🛠 OTP trùng tên đang chờ đổi rồi lưu trực tiếp:",
+                    "- Bấm nút bên dưới để chọn OTP cần đổi tên",
+                    "- Hoặc dùng: /renqr stt|ten_moi",
+                    f"- Đang chờ: {pending_count} OTP",
+                ]
+                report_text = report_text + "\n" + "\n".join(tips)
+
+        if ok and google_sheet_id:
+            sync_ok, sync_msg = maybe_sync_google_sheet(
+                wps_file,
+                google_sheet_id,
+                google_sheet_name,
+                google_service_account_json,
+                google_service_account_file,
+            )
+            report_text = f"{report_text}\n\n☁️ Google Sheets: {'✅ ' if sync_ok else '❌ '}{sync_msg}"
+
+        print(f"[QR_WORKER] Gửi kết quả về {message_chat_id}: ok={ok}", flush=True)
+        duplicate_buttons = build_qr_duplicate_buttons(duplicate_names) if (ok and duplicate_names) else None
+        send_message(bot_token, message_chat_id, report_text, duplicate_buttons)
+        if ok:
+            caption = f"Cập nhật OTP từ QR lúc {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            send_document(bot_token, message_chat_id, wps_file, caption)
+    except Exception as e:
+        print(f"[QR_WORKER] LỖI ngoài dự kiến: {e}", flush=True)
+        traceback.print_exc()
+        try:
+            send_message(bot_token, message_chat_id, f"❌ Lỗi xử lý QR: {e}")
+        except Exception:
+            pass
     parser = argparse.ArgumentParser(description="Listen OTP commands from Telegram groups")
     data_dir = os.environ.get("DATA_DIR", "")
     default_permission_file = os.path.join(data_dir, "telegram_permissions.json") if data_dir else "telegram_permissions.json"
@@ -2315,6 +2386,13 @@ def main() -> int:
 
     # Hold process-wide lock to avoid two concurrent pollers causing duplicates.
     _singleton_lock_handle = acquire_singleton_lock(args.singleton_lock_file)
+
+    # Thread pool for QR photo processing — max 4 concurrent heavy tasks so the
+    # main poll loop is never blocked downloading/decoding images.  CSV writes in
+    # each worker are already serialised by _csv_rw_lock.
+    _photo_pool = concurrent.futures.ThreadPoolExecutor(
+        max_workers=4, thread_name_prefix="qr_worker"
+    )
 
     if not args.bot_token or not args.chat_id or not args.employee_chat_id:
         print("❌ Thiếu TELEGRAM_BOT_TOKEN hoặc chat id của admin/nhân viên")
@@ -2651,47 +2729,20 @@ def main() -> int:
 
             # Nhóm admin: xử lý ảnh QR trước tiên
             if is_admin_chat and msg.get("photo"):
-                print(f"[MAIN] Nhận tin nhắn ảnh từ {message_chat_id}")
-                if args.google_sheet_id:
-                    restore_ok, restore_msg = force_restore_csv_from_google_sheet(
-                        args.wps_file,
-                        args.google_sheet_id,
-                        args.google_sheet_name,
-                        args.google_service_account_json,
-                        args.google_service_account_file,
-                    )
-                    print(f"☁️ Pre-write restore: {'OK' if restore_ok else 'FAIL'} | {restore_msg}", flush=True)
-                report_text, ok, duplicate_names = process_qr_photo(args.bot_token, msg, args.wps_file)
-                if ok and duplicate_names:
-                    pending_count = remember_qr_duplicate_names(
-                        args.pending_file,
-                        message_chat_id,
-                        str(user.get("id", "")),
-                        duplicate_names,
-                    )
-                    if pending_count:
-                        tips: List[str] = []
-                        tips.append("")
-                        tips.append("🛠 OTP trùng tên đang chờ đổi rồi lưu trực tiếp:")
-                        tips.append("- Bấm nút bên dưới để chọn OTP cần đổi tên")
-                        tips.append("- Hoặc dùng: /renqr stt|ten_moi")
-                        tips.append(f"- Đang chờ: {pending_count} OTP")
-                        report_text = report_text + "\n" + "\n".join(tips)
-                if ok:
-                    sync_ok, sync_msg = maybe_sync_google_sheet(
-                        args.wps_file,
-                        args.google_sheet_id,
-                        args.google_sheet_name,
-                        args.google_service_account_json,
-                        args.google_service_account_file,
-                    )
-                    report_text = f"{report_text}\n\n☁️ Google Sheets: {'✅ ' if sync_ok else '❌ '}{sync_msg}"
-                print(f"[MAIN] Sắp gửi Telegram: {report_text[:50]}...")
-                duplicate_buttons = build_qr_duplicate_buttons(duplicate_names) if (ok and duplicate_names) else None
-                send_message(args.bot_token, message_chat_id, report_text, duplicate_buttons)
-                if ok:
-                    caption = f"Cập nhật OTP từ QR lúc {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-                    send_document(args.bot_token, message_chat_id, args.wps_file, caption)
+                print(f"[MAIN] Ảnh QR nhận từ {message_chat_id}, submit vào worker pool (không chặn poll)", flush=True)
+                _photo_pool.submit(
+                    _qr_photo_worker,
+                    args.bot_token,
+                    msg,
+                    args.wps_file,
+                    args.pending_file,
+                    message_chat_id,
+                    str(user.get("id", "")),
+                    args.google_sheet_id,
+                    args.google_sheet_name,
+                    args.google_service_account_json,
+                    args.google_service_account_file,
+                )
                 continue
 
             if is_admin_chat and text.startswith("/renqr"):
