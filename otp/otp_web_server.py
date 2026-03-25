@@ -103,6 +103,8 @@ _SESSIONS_LOCK = threading.Lock()
 _SESSIONS: Dict[str, Dict[str, Any]] = {}
 _SHEET_LOCK = threading.Lock()
 _LAST_SHEET_SYNC_TS = 0
+_LAST_SHEET_SYNC_OK = False
+_LAST_SHEET_SYNC_MSG = "not started"
 
 
 def _now_ts() -> int:
@@ -189,8 +191,10 @@ def _is_time_window_allowed() -> bool:
 
 
 def _maybe_refresh_csv_from_sheet() -> None:
-	global _LAST_SHEET_SYNC_TS
+	global _LAST_SHEET_SYNC_TS, _LAST_SHEET_SYNC_OK, _LAST_SHEET_SYNC_MSG
 	if not GOOGLE_SHEET_ID:
+		_LAST_SHEET_SYNC_OK = False
+		_LAST_SHEET_SYNC_MSG = "missing GOOGLE_SHEET_ID"
 		return
 	now = _now_ts()
 	if now - int(_LAST_SHEET_SYNC_TS) < WEB_SHEET_REFRESH_SECONDS:
@@ -207,6 +211,8 @@ def _maybe_refresh_csv_from_sheet() -> None:
 			GOOGLE_SERVICE_ACCOUNT_FILE,
 		)
 		_LAST_SHEET_SYNC_TS = now
+		_LAST_SHEET_SYNC_OK = bool(ok)
+		_LAST_SHEET_SYNC_MSG = msg
 		_write_audit_line(
 			{
 				"ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -694,6 +700,14 @@ class OTPWebHandler(BaseHTTPRequestHandler):
 
 		_maybe_refresh_csv_from_sheet()
 		text, ok = process_getotp_query(query, CSV_PATH)
+		if (not ok) and ("Chưa có dữ liệu OTP" in text):
+			text = (
+				text
+				+ "\n\n[Sheet sync]\n"
+				+ f"ok={_LAST_SHEET_SYNC_OK} | msg={_LAST_SHEET_SYNC_MSG}\n"
+				+ f"sheet_id={GOOGLE_SHEET_ID}\n"
+				+ f"sheet_name={GOOGLE_SHEET_NAME}"
+			)
 		self._send_json(200, {"ok": bool(ok), "text": text, "sessionText": self._session_text(session or {})})
 		_write_audit_line({"ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "type": "lookup", "client": ip, "username": (session or {}).get("username", ""), "query": query, "ok": bool(ok)})
 
@@ -705,6 +719,9 @@ def main() -> int:
 
 	if not os.path.exists(CSV_PATH):
 		print(f"CSV file not found yet: {CSV_PATH}")
+
+	_maybe_refresh_csv_from_sheet()
+	print(f"Initial sheet sync: ok={_LAST_SHEET_SYNC_OK} msg={_LAST_SHEET_SYNC_MSG}")
 
 	server = ThreadingHTTPServer((WEB_HOST, WEB_PORT), OTPWebHandler)
 	print(f"OTP Web server running at http://{WEB_HOST}:{WEB_PORT}")
