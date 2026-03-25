@@ -12,7 +12,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, Optional, Set, Tuple
 from urllib.parse import parse_qs, urlparse
 
-from telegram_otp_listener import force_restore_csv_from_google_sheet, load_csv_rows, process_getotp_query
+from telegram_otp_listener import force_restore_csv_from_google_sheet, generate_totp_code, load_csv_rows, process_getotp_query
 
 
 def _bool_from_env(name: str, default: bool = True) -> bool:
@@ -268,6 +268,25 @@ def _suggest_account_names(query: str, csv_path: str, limit: int = 8) -> list[st
 	return [name for _, name in scored[:max(limit, 1)]]
 
 
+def _find_secret_by_account(account_name: str, csv_path: str) -> Tuple[Optional[str], str]:
+	name = (account_name or "").strip()
+	if not name:
+		return None, "empty account"
+	_, rows = load_csv_rows(csv_path)
+	if not rows:
+		return None, "no csv rows"
+
+	name_lower = name.lower()
+	for row in rows:
+		acc = (row.get("Account") or "").strip()
+		if acc.lower() == name_lower:
+			secret = (row.get("Secret") or "").strip()
+			if secret:
+				return secret, ""
+			return None, "empty secret"
+	return None, "account not found"
+
+
 def _html_page() -> str:
 	return """<!doctype html>
 <html lang=\"vi\"><head>
@@ -386,6 +405,18 @@ def _html_page() -> str:
 	.main-card { padding: 24px; }
 	.login-grid { display: grid; grid-template-columns: 1fr 1fr auto; gap: 12px; }
 	.toolbar { display: grid; gap: 14px; }
+	.workspace {
+	  display: grid;
+	  grid-template-columns: 1.5fr .8fr;
+	  gap: 14px;
+	}
+	.result-col,
+	.live-col {
+	  border: 1px solid var(--line);
+	  border-radius: 18px;
+	  background: rgba(9, 20, 47, .55);
+	  padding: 14px;
+	}
 	.search-wrap { position: relative; }
 	.query-row { display: grid; grid-template-columns: 1fr auto auto; gap: 12px; align-items: start; }
 	.input-shell {
@@ -502,7 +533,7 @@ def _html_page() -> str:
 	}
 	pre {
 	  margin: 0;
-	  min-height: 340px;
+	  min-height: 320px;
 	  border-radius: 20px;
 	  border: 1px solid var(--line);
 	  background: linear-gradient(180deg, rgba(8,18,44,.9), rgba(8,18,44,.82));
@@ -512,6 +543,71 @@ def _html_page() -> str:
 	  font-size: 30px;
 	  line-height: 1.42;
 	  box-shadow: inset 0 1px 0 rgba(255,255,255,.03);
+	}
+	.live-title {
+	  font-size: 14px;
+	  letter-spacing: .1em;
+	  text-transform: uppercase;
+	  color: #cfe2ff;
+	}
+	.live-account {
+	  margin-top: 8px;
+	  font-size: 16px;
+	  color: #eaf1ff;
+	  min-height: 24px;
+	}
+	.otp-card {
+	  margin-top: 12px;
+	  border-radius: 18px;
+	  border: 1px solid var(--line);
+	  background: linear-gradient(180deg, rgba(8,18,44,.95), rgba(8,18,44,.8));
+	  padding: 16px;
+	}
+	.otp-code {
+	  font-size: 52px;
+	  letter-spacing: .12em;
+	  font-weight: 800;
+	  color: #f8fdff;
+	}
+	.otp-sub {
+	  margin-top: 8px;
+	  color: var(--muted);
+	  font-size: 14px;
+	}
+	.ring-wrap {
+	  margin-top: 16px;
+	  display: flex;
+	  align-items: center;
+	  gap: 14px;
+	}
+	.ring {
+	  --pct: 0;
+	  width: 74px;
+	  height: 74px;
+	  border-radius: 50%;
+	  background: conic-gradient(var(--accent) calc(var(--pct) * 1%), rgba(148,163,184,.2) 0);
+	  display: grid;
+	  place-items: center;
+	}
+	.ring::after {
+	  content: '';
+	  width: 56px;
+	  height: 56px;
+	  border-radius: 50%;
+	  background: #0c1c3f;
+	  border: 1px solid rgba(148,163,184,.22);
+	}
+	.ring-sec {
+	  margin-left: -58px;
+	  width: 56px;
+	  text-align: center;
+	  font-size: 18px;
+	  font-weight: 700;
+	  z-index: 2;
+	}
+	.copy-btn {
+	  margin-top: 14px;
+	  width: 100%;
 	}
 	.mini-help {
 	  display: flex;
@@ -532,9 +628,10 @@ def _html_page() -> str:
 	@media (max-width: 760px) {
 	  body { padding: 16px; }
 	  .hero-title { font-size: 40px; }
-	  .login-grid, .query-row { grid-template-columns: 1fr; }
+	  .login-grid, .query-row, .workspace { grid-template-columns: 1fr; }
 	  pre { font-size: 23px; min-height: 280px; }
 	  input, button { font-size: 20px; }
+	  .otp-code { font-size: 40px; }
 	}
   </style>
 </head><body>
@@ -582,11 +679,28 @@ def _html_page() -> str:
 		<div class=\"status-tag\"><span class=\"live-dot\"></span> live session</div>
 	  </div>
 
-	  <div class=\"panel-head\">
-		<div class=\"panel-title\">Result stream</div>
-		<div class=\"panel-title\">OTP output</div>
+	  <div class=\"workspace\">
+		<div class=\"result-col\">
+		  <div class=\"panel-head\">
+			<div class=\"panel-title\">Result stream</div>
+			<div class=\"panel-title\">OTP output</div>
+		  </div>
+		  <pre id=\"out\">San sang.</pre>
+		</div>
+		<div class=\"live-col\">
+		  <div class=\"live-title\">Live OTP</div>
+		  <div id=\"liveAccount\" class=\"live-account\">Chua chon account</div>
+		  <div class=\"otp-card\">
+			<div id=\"liveCode\" class=\"otp-code\">------</div>
+			<div id=\"liveMeta\" class=\"otp-sub\">Chon goi y ben trai de xem OTP realtime</div>
+			<div class=\"ring-wrap\">
+			  <div id=\"liveRing\" class=\"ring\" style=\"--pct:0\"></div>
+			  <div id=\"liveSec\" class=\"ring-sec\">0s</div>
+			</div>
+			<button id=\"btnCopyLive\" class=\"primary copy-btn\">Copy OTP</button>
+		  </div>
+		</div>
 	  </div>
-	  <pre id=\"out\">San sang.</pre>
 	</section>
   </main>
 
@@ -598,12 +712,85 @@ def _html_page() -> str:
 	const queryInput = document.getElementById('query');
 	const suggestBox = document.getElementById('suggestions');
 	const btnLookup = document.getElementById('btnLookup');
+	const liveAccount = document.getElementById('liveAccount');
+	const liveCode = document.getElementById('liveCode');
+	const liveMeta = document.getElementById('liveMeta');
+	const liveRing = document.getElementById('liveRing');
+	const liveSec = document.getElementById('liveSec');
+	const btnCopyLive = document.getElementById('btnCopyLive');
 	let suggestTimer = null;
 	let currentSuggestions = [];
 	let activeSuggestionIndex = -1;
+	let liveAccountName = '';
+	let liveTimer = null;
 
 	function setOutput(text) {
 	  out.textContent = text;
+	}
+
+	function setLiveStateEmpty(msg) {
+	  liveAccountName = '';
+	  liveAccount.textContent = 'Chua chon account';
+	  liveCode.textContent = '------';
+	  liveMeta.textContent = msg || 'Chon goi y ben trai de xem OTP realtime';
+	  liveRing.style.setProperty('--pct', 0);
+	  liveSec.textContent = '0s';
+	}
+
+	function parseAccountFromText(text) {
+	  const lines = String(text || '').split('\n');
+	  for (const ln of lines) {
+		const s = ln.trim();
+		if (s.startsWith('Account:')) {
+		  return s.slice('Account:'.length).trim();
+		}
+	  }
+	  return '';
+	}
+
+	function updateLiveVisual(code, remaining, period) {
+	  const safeCode = String(code || '------');
+	  const rem = Math.max(0, Number(remaining || 0));
+	  const per = Math.max(1, Number(period || 30));
+	  const pct = Math.max(0, Math.min(100, (rem / per) * 100));
+	  liveCode.textContent = safeCode;
+	  liveSec.textContent = rem + 's';
+	  liveRing.style.setProperty('--pct', pct.toFixed(1));
+	  liveMeta.textContent = 'Tu dong lam moi moi giay';
+	}
+
+	async function refreshLiveOtp() {
+	  if (!liveAccountName) return;
+	  try {
+		const res = await fetch('/api/otp-live?account=' + encodeURIComponent(liveAccountName), { credentials:'same-origin' });
+		if (res.status === 401) {
+		  if (liveTimer) clearInterval(liveTimer);
+		  liveTimer = null;
+		  setLiveStateEmpty('Het phien. Vui long dang nhap lai.');
+		  await checkSession();
+		  return;
+		}
+		const d = await res.json();
+		if (!d.ok) {
+		  liveMeta.textContent = d.error || 'Khong lay duoc OTP live';
+		  return;
+		}
+		liveAccount.textContent = d.account || liveAccountName;
+		updateLiveVisual(d.code, d.remaining, d.period || 30);
+	  } catch (e) {
+		liveMeta.textContent = 'Loi ket noi live OTP';
+	  }
+	}
+
+	function startLiveOtp(accountName) {
+	  const acc = String(accountName || '').trim();
+	  if (!acc) return;
+	  liveAccountName = acc;
+	  liveAccount.textContent = acc;
+	  liveMeta.textContent = 'Dang dong bo OTP live...';
+	  refreshLiveOtp();
+	  if (liveTimer) clearInterval(liveTimer);
+	  liveTimer = setInterval(refreshLiveOtp, 1000);
 	}
 
 	function showSuggestions() {
@@ -636,6 +823,9 @@ def _html_page() -> str:
 		  loginBox.classList.remove('hide');
 		  appBox.classList.add('hide');
 		  hideSuggestions();
+		  if (liveTimer) clearInterval(liveTimer);
+		  liveTimer = null;
+		  setLiveStateEmpty('Dang xac thuc phien...');
 		  status.textContent = d.error || 'Chua dang nhap.';
 		}
 	  } catch (e) {
@@ -661,6 +851,9 @@ def _html_page() -> str:
 	async function logout() {
 	  await fetch('/api/logout', { method:'POST', credentials:'same-origin' });
 	  hideSuggestions();
+	  if (liveTimer) clearInterval(liveTimer);
+	  liveTimer = null;
+	  setLiveStateEmpty('Da dang xuat');
 	  setOutput('Da dang xuat.');
 	  await checkSession();
 	}
@@ -684,6 +877,9 @@ def _html_page() -> str:
 		});
 		const d = await res.json();
 		setOutput(d.text || d.error || '(trong)');
+		const parsedAccount = parseAccountFromText(d.text || '');
+		if (parsedAccount) startLiveOtp(parsedAccount);
+		else if (res.ok) startLiveOtp(query);
 		if (d.sessionText) status.textContent = d.sessionText;
 		if (res.status === 401) await checkSession();
 	  } finally {
@@ -707,6 +903,7 @@ def _html_page() -> str:
 	  suggestBox.querySelectorAll('.suggest-item').forEach((node) => {
 		node.addEventListener('click', () => {
 		  const name = node.getAttribute('data-name') || '';
+		  startLiveOtp(name);
 		  lookup(name);
 		});
 	  });
@@ -775,7 +972,18 @@ def _html_page() -> str:
 	document.getElementById('btnLogin').addEventListener('click', login);
 	document.getElementById('btnLookup').addEventListener('click', () => lookup());
 	document.getElementById('btnLogout').addEventListener('click', logout);
+	btnCopyLive.addEventListener('click', async () => {
+	  const val = (liveCode.textContent || '').trim();
+	  if (!val || val === '------') return;
+	  try {
+		await navigator.clipboard.writeText(val);
+		liveMeta.textContent = 'Da copy OTP vao clipboard';
+	  } catch (e) {
+		liveMeta.textContent = 'Khong copy duoc. Thu lai';
+	  }
+	});
 	document.getElementById('password').addEventListener('keydown', (e) => { if (e.key === 'Enter') login(); });
+	setLiveStateEmpty('Chon goi y ben trai de xem OTP realtime');
 	checkSession();
   </script>
 </body></html>"""
@@ -898,6 +1106,44 @@ class OTPWebHandler(BaseHTTPRequestHandler):
 			_maybe_refresh_csv_from_sheet()
 			items = _suggest_account_names(query, CSV_PATH, 8)
 			self._send_json(200, {"ok": True, "items": items})
+			return
+		if parsed.path == "/api/otp-live":
+			ip = self._client_ip()
+			if not self._is_ip_allowed(ip):
+				self._send_json(403, {"ok": False, "error": "ip not allowed"})
+				return
+			if not _is_time_window_allowed():
+				self._send_json(403, {"ok": False, "error": "outside allowed time"})
+				return
+			session = self._current_session()
+			if WEB_REQUIRE_KEY and not session:
+				self._send_json(401, {"ok": False, "error": "unauthorized"})
+				return
+			params = parse_qs(parsed.query or "")
+			account = (params.get("account") or [""])[0].strip()
+			if not account:
+				self._send_json(400, {"ok": False, "error": "missing account"})
+				return
+			_maybe_refresh_csv_from_sheet()
+			secret, err = _find_secret_by_account(account, CSV_PATH)
+			if not secret:
+				self._send_json(404, {"ok": False, "error": err or "account not found"})
+				return
+			code, remaining = generate_totp_code(secret)
+			if not code:
+				self._send_json(422, {"ok": False, "error": "invalid secret"})
+				return
+			self._send_json(
+				200,
+				{
+					"ok": True,
+					"account": account,
+					"code": code,
+					"remaining": int(remaining or 0),
+					"period": 30,
+					"sessionText": self._session_text(session or {}),
+				},
+			)
 			return
 		self._send_json(404, {"ok": False, "error": "not found"})
 
