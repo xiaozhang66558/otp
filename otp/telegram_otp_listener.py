@@ -261,6 +261,31 @@ def _load_google_service_account_info(
         return None, f"Không đọc được service account file: {e}"
 
 
+def _resolve_sheet_title(service, spreadsheet_id: str, sheet_name: str) -> Tuple[Optional[str], str]:
+    raw_sheet = (sheet_name or "").strip()
+    if not raw_sheet:
+        return None, "Thiếu GOOGLE_SHEET_NAME hoặc GOOGLE_SHEET_GID"
+
+    try:
+        meta = service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
+    except Exception as e:
+        return None, f"Không đọc được metadata Google Sheet: {e}"
+
+    sheets = meta.get("sheets") or []
+    if raw_sheet.isdigit():
+        for sheet in sheets:
+            props = sheet.get("properties") or {}
+            if str(props.get("sheetId", "")) == raw_sheet:
+                return (props.get("title") or ""), ""
+        return None, f"Không tìm thấy tab với gid={raw_sheet}"
+
+    current_titles = {(s.get("properties") or {}).get("title", "") for s in sheets}
+    if raw_sheet in current_titles:
+        return raw_sheet, ""
+
+    return None, f"Không tìm thấy tab Google Sheet: {raw_sheet}"
+
+
 def sync_csv_to_google_sheet(
     csv_path: str,
     spreadsheet_id: str,
@@ -298,28 +323,35 @@ def sync_csv_to_google_sheet(
         )
         service = build("sheets", "v4", credentials=creds, cache_discovery=False)
 
+        resolved_title, resolve_err = _resolve_sheet_title(service, spreadsheet_id, sheet_name)
+        if resolve_err and not (sheet_name or "").strip().isdigit():
+            resolved_title = (sheet_name or "").strip()
+        elif resolve_err:
+            return False, resolve_err
+        target_sheet = resolved_title or (sheet_name or "").strip()
+
         # Ensure sheet exists before writing.
         meta = service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
         current_titles = {
             (s.get("properties") or {}).get("title", "")
             for s in (meta.get("sheets") or [])
         }
-        if sheet_name not in current_titles:
+        if target_sheet not in current_titles:
             service.spreadsheets().batchUpdate(
                 spreadsheetId=spreadsheet_id,
-                body={"requests": [{"addSheet": {"properties": {"title": sheet_name}}}]},
+                body={"requests": [{"addSheet": {"properties": {"title": target_sheet}}}]},
             ).execute()
 
         service.spreadsheets().values().clear(
             spreadsheetId=spreadsheet_id,
-            range=f"{sheet_name}!A:Z",
+            range=f"{target_sheet}!A:Z",
             body={},
         ).execute()
 
         if values:
             service.spreadsheets().values().update(
                 spreadsheetId=spreadsheet_id,
-                range=f"{sheet_name}!A1",
+                range=f"{target_sheet}!A1",
                 valueInputOption="RAW",
                 body={"values": values},
             ).execute()
@@ -372,9 +404,12 @@ def load_sheet_rows(
             scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"],
         )
         service = build("sheets", "v4", credentials=creds, cache_discovery=False)
+        resolved_title, resolve_err = _resolve_sheet_title(service, spreadsheet_id, sheet_name)
+        if resolve_err:
+            return False, [], resolve_err
         resp = service.spreadsheets().values().get(
             spreadsheetId=spreadsheet_id,
-            range=f"{sheet_name}!A:Z",
+            range=f"{resolved_title}!A:Z",
         ).execute()
         values = resp.get("values") or []
         return True, values, ""

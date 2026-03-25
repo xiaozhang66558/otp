@@ -87,7 +87,11 @@ WEB_ALLOWED_TIME_WINDOW = _parse_allowed_window(os.environ.get("OTP_WEB_ALLOWED_
 WEB_SHEET_REFRESH_SECONDS = max(int(os.environ.get("OTP_WEB_SHEET_REFRESH_SECONDS", "15") or "15"), 5)
 
 GOOGLE_SHEET_ID = os.environ.get("GOOGLE_SHEET_ID", "").strip()
-GOOGLE_SHEET_NAME = os.environ.get("GOOGLE_SHEET_NAME", "OTP").strip() or "OTP"
+GOOGLE_SHEET_NAME = (
+	os.environ.get("GOOGLE_SHEET_GID", "").strip()
+	or os.environ.get("GOOGLE_SHEET_NAME", "OTP").strip()
+	or "OTP"
+)
 GOOGLE_SERVICE_ACCOUNT_FILE = os.environ.get("GOOGLE_SERVICE_ACCOUNT_FILE", "").strip()
 GOOGLE_SERVICE_ACCOUNT_JSON = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
 
