@@ -276,123 +276,316 @@ def _html_page() -> str:
   <title>Nefitly OTP</title>
   <style>
 	:root {
-	  --bg-a:#0d1a39;
-	  --bg-b:#11214b;
-	  --bg-c:#1a2f63;
-	  --card:#0f1f47cc;
-	  --line:#8ea4d133;
-	  --text:#e9f1ff;
-	  --muted:#b4c4e8;
-	  --primary:#2dd4bf;
-	  --primary-2:#38bdf8;
+	  --bg-1:#07122b;
+	  --bg-2:#0f2047;
+	  --bg-3:#15356e;
+	  --panel:#0c1b3ac9;
+	  --panel-strong:#10244f;
+	  --line:rgba(148, 163, 184, .18);
+	  --text:#eef4ff;
+	  --muted:#aac0e8;
+	  --soft:#d9ecff;
+	  --accent:#35d0ff;
+	  --accent-2:#4fffb0;
+	  --shadow:0 32px 80px rgba(2, 7, 23, .52);
 	}
-	* { box-sizing:border-box; }
+	* { box-sizing: border-box; }
 	body {
-	  font-family: 'Segoe UI', 'SF Pro Text', -apple-system, sans-serif;
-	  background: radial-gradient(1200px 700px at 10% 5%, #1c3270 0%, transparent 50%),
-	              radial-gradient(1000px 600px at 90% 90%, #0a2556 0%, transparent 55%),
-	              linear-gradient(145deg, var(--bg-a), var(--bg-b) 45%, var(--bg-c));
-	  color: var(--text);
 	  margin: 0;
 	  min-height: 100vh;
-	  padding: 22px;
+	  color: var(--text);
+	  font-family: 'Segoe UI', 'SF Pro Display', -apple-system, sans-serif;
+	  background:
+	    radial-gradient(900px 480px at 0% 0%, rgba(53,208,255,.22), transparent 60%),
+	    radial-gradient(760px 540px at 100% 100%, rgba(79,255,176,.12), transparent 55%),
+	    linear-gradient(145deg, var(--bg-1), var(--bg-2) 45%, var(--bg-3));
+	  padding: 28px;
 	}
-	.card {
-	  max-width: 980px;
+	.shell {
+	  max-width: 1160px;
 	  margin: 0 auto;
-	  background: var(--card);
+	}
+	.hero {
+	  display: grid;
+	  grid-template-columns: 1.4fr .9fr;
+	  gap: 18px;
+	  margin-bottom: 18px;
+	}
+	.hero-card,
+	.side-card,
+	.main-card {
+	  background: linear-gradient(180deg, rgba(14,28,60,.92), rgba(11,24,54,.88));
+	  border: 1px solid var(--line);
+	  border-radius: 24px;
+	  box-shadow: var(--shadow);
+	  backdrop-filter: blur(10px);
+	}
+	.hero-card {
+	  padding: 28px;
+	  min-height: 220px;
+	  position: relative;
+	  overflow: hidden;
+	}
+	.hero-card:before {
+	  content: '';
+	  position: absolute;
+	  width: 320px;
+	  height: 320px;
+	  border-radius: 50%;
+	  background: radial-gradient(circle, rgba(53,208,255,.18), transparent 60%);
+	  top: -120px;
+	  right: -80px;
+	}
+	.badge {
+	  display: inline-flex;
+	  align-items: center;
+	  gap: 8px;
+	  padding: 8px 14px;
+	  border: 1px solid rgba(79,255,176,.28);
+	  border-radius: 999px;
+	  color: #d7ffef;
+	  background: rgba(79,255,176,.08);
+	  font-size: 13px;
+	  letter-spacing: .08em;
+	  text-transform: uppercase;
+	}
+	.hero-title {
+	  margin: 18px 0 10px;
+	  font-size: 54px;
+	  line-height: 1;
+	  letter-spacing: -.04em;
+	}
+	.hero-text {
+	  max-width: 680px;
+	  color: var(--muted);
+	  font-size: 18px;
+	  line-height: 1.6;
+	}
+	.kpi-grid {
+	  display: grid;
+	  gap: 14px;
+	  padding: 18px;
+	}
+	.kpi {
+	  background: rgba(9, 20, 47, .84);
 	  border: 1px solid var(--line);
 	  border-radius: 20px;
-	  overflow: hidden;
-	  box-shadow: 0 24px 70px rgba(1, 8, 30, .45);
+	  padding: 18px;
 	}
-	.head {
-	  padding: 24px;
-	  background: linear-gradient(120deg, rgba(45,212,191,.22), rgba(56,189,248,.12));
-	  border-bottom: 1px solid var(--line);
+	.kpi-label {
+	  color: var(--muted);
+	  font-size: 12px;
+	  text-transform: uppercase;
+	  letter-spacing: .08em;
 	}
-	.head h2 { margin: 0; font-size: 36px; letter-spacing: .2px; }
-	.sub { margin-top: 8px; color: var(--muted); font-size: 14px; }
-	.body { padding: 20px; display: grid; gap: 12px; }
-	.row { display: grid; grid-template-columns: 1fr 1fr auto; gap: 10px; }
-	.query-row { display: grid; grid-template-columns: 1fr auto auto; gap: 10px; }
-	input, button {
-	  border-radius: 14px;
-	  padding: 12px 14px;
-	  font-size: 19px;
-	}
-	input {
-	  border: 1px solid #89a6db55;
-	  background: #f4f8ff;
-	  color: #0f172a;
-	}
-	button {
-	  border: none;
-	  cursor: pointer;
-	  color: #03111f;
-	  background: linear-gradient(120deg, var(--primary), var(--primary-2));
+	.kpi-value {
+	  margin-top: 10px;
+	  font-size: 22px;
 	  font-weight: 700;
 	}
-	button:hover { transform: translateY(-1px); filter: brightness(1.04); }
+	.main-card { padding: 24px; }
+	.login-grid { display: grid; grid-template-columns: 1fr 1fr auto; gap: 12px; }
+	.toolbar { display: grid; gap: 14px; }
+	.search-wrap { position: relative; }
+	.query-row { display: grid; grid-template-columns: 1fr auto auto; gap: 12px; align-items: start; }
+	.input-shell {
+	  position: relative;
+	  border-radius: 18px;
+	  background: linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.02));
+	  border: 1px solid rgba(148,163,184,.22);
+	  padding: 6px;
+	}
+	.input-shell:focus-within {
+	  border-color: rgba(53,208,255,.55);
+	  box-shadow: 0 0 0 4px rgba(53,208,255,.12);
+	}
+	input {
+	  width: 100%;
+	  border: 0;
+	  outline: 0;
+	  border-radius: 14px;
+	  padding: 18px 18px;
+	  background: var(--soft);
+	  color: #0f172a;
+	  font-size: 26px;
+	  font-weight: 600;
+	}
+	input::placeholder { color: #64748b; font-weight: 500; }
+	button {
+	  border: 0;
+	  border-radius: 18px;
+	  cursor: pointer;
+	  padding: 18px 22px;
+	  font-size: 20px;
+	  font-weight: 800;
+	  letter-spacing: -.02em;
+	  transition: transform .12s ease, filter .12s ease, box-shadow .12s ease;
+	}
+	button:hover { transform: translateY(-1px); filter: brightness(1.03); }
+	button:active { transform: translateY(0); }
+	.primary {
+	  color: #082032;
+	  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+	  box-shadow: 0 18px 30px rgba(53,208,255,.18);
+	}
 	.ghost {
-	  background: #dbeafe;
-	  color: #1e293b;
+	  color: #dce9ff;
+	  background: rgba(255,255,255,.08);
+	  border: 1px solid rgba(148,163,184,.16);
 	}
 	.hide { display: none; }
-	.hint {
-	  color: #dbeafe;
-	  font-size: 30px;
+	.status-bar {
+	  display: flex;
+	  align-items: center;
+	  justify-content: space-between;
+	  gap: 12px;
+	  flex-wrap: wrap;
+	  padding: 14px 16px;
+	  border: 1px solid var(--line);
+	  border-radius: 18px;
+	  background: rgba(13,27,58,.72);
 	}
-	.suggest {
-	  margin-top: -2px;
+	.status-main { font-size: 18px; color: #dbeafe; }
+	.status-tag {
+	  padding: 8px 12px;
+	  border-radius: 999px;
+	  background: rgba(53,208,255,.14);
+	  border: 1px solid rgba(53,208,255,.26);
+	  color: #c9f7ff;
+	  font-size: 13px;
+	}
+	.suggest-menu {
+	  position: absolute;
+	  top: calc(100% + 10px);
+	  left: 0;
+	  right: 0;
 	  display: grid;
 	  gap: 8px;
+	  padding: 10px;
+	  border-radius: 18px;
+	  background: rgba(10, 20, 45, .96);
+	  border: 1px solid rgba(148,163,184,.18);
+	  box-shadow: 0 22px 44px rgba(2, 7, 23, .45);
+	  z-index: 25;
 	}
-	.suggest button {
+	.suggest-item {
+	  display: grid;
+	  gap: 4px;
 	  text-align: left;
-	  font-size: 17px;
-	  border-radius: 12px;
-	  background: #dbeafe;
-	  color: #0f172a;
+	  border-radius: 14px;
+	  padding: 14px 16px;
+	  background: rgba(255,255,255,.04);
+	  color: #f8fbff;
+	  border: 1px solid transparent;
+	}
+	.suggest-item:hover,
+	.suggest-item.active {
+	  background: linear-gradient(135deg, rgba(53,208,255,.18), rgba(79,255,176,.14));
+	  border-color: rgba(79,255,176,.22);
+	}
+	.suggest-title { font-size: 18px; font-weight: 700; }
+	.suggest-meta { font-size: 12px; color: #bcd1f2; text-transform: uppercase; letter-spacing: .08em; }
+	.panel-head {
+	  display: flex;
+	  align-items: center;
+	  justify-content: space-between;
+	  gap: 12px;
+	  margin-bottom: 12px;
+	}
+	.panel-title { font-size: 16px; color: #dce8ff; text-transform: uppercase; letter-spacing: .1em; }
+	.live-dot {
+	  width: 10px;
+	  height: 10px;
+	  border-radius: 50%;
+	  background: #4fffb0;
+	  box-shadow: 0 0 0 8px rgba(79,255,176,.12);
 	}
 	pre {
-	  background: #0a1738cc;
+	  margin: 0;
+	  min-height: 340px;
+	  border-radius: 20px;
 	  border: 1px solid var(--line);
-	  color: #eff6ff;
-	  border-radius: 14px;
-	  padding: 16px;
-	  min-height: 300px;
+	  background: linear-gradient(180deg, rgba(8,18,44,.9), rgba(8,18,44,.82));
+	  color: #f4f8ff;
+	  padding: 22px;
 	  white-space: pre-wrap;
 	  font-size: 30px;
-	  line-height: 1.35;
+	  line-height: 1.42;
+	  box-shadow: inset 0 1px 0 rgba(255,255,255,.03);
+	}
+	.mini-help {
+	  display: flex;
+	  gap: 10px;
+	  flex-wrap: wrap;
+	  color: var(--muted);
+	  font-size: 13px;
+	}
+	.mini-chip {
+	  padding: 8px 12px;
+	  border-radius: 999px;
+	  border: 1px solid var(--line);
+	  background: rgba(255,255,255,.03);
+	}
+	@media (max-width: 960px) {
+	  .hero { grid-template-columns: 1fr; }
 	}
 	@media (max-width: 760px) {
-	  .row, .query-row { grid-template-columns: 1fr; }
-	  .head h2 { font-size: 30px; }
-	  .hint { font-size: 24px; }
-	  pre { font-size: 24px; min-height: 260px; }
+	  body { padding: 16px; }
+	  .hero-title { font-size: 40px; }
+	  .login-grid, .query-row { grid-template-columns: 1fr; }
+	  pre { font-size: 23px; min-height: 280px; }
+	  input, button { font-size: 20px; }
 	}
   </style>
 </head><body>
-  <main class=\"card\">
-	<section class=\"head\"><h2>OTP Web Lookup</h2><div class=\"sub\">Tra cuu OTP nhanh, go den dau goi y den do</div></section>
-	<section class=\"body\">
-	  <div id=\"loginBox\" class=\"row\">
-		<input id=\"username\" placeholder=\"Username\" />
-		<input id=\"password\" type=\"password\" placeholder=\"Password\" />
-		<button id=\"btnLogin\">Dang nhap</button>
+  <main class=\"shell\">
+	<section class=\"hero\">
+	  <div class=\"hero-card\">
+		<div class=\"badge\">Live OTP Console</div>
+		<h1 class=\"hero-title\">OTP lookup that feels instant.</h1>
+		<div class=\"hero-text\">Go tung ky tu, nhin goi y hien ngay ben duoi. Chon nhanh bang chuot hoac phim len/xuong, Enter de lay OTP.</div>
+	  </div>
+	  <div class=\"side-card\">
+		<div class=\"kpi-grid\">
+		  <div class=\"kpi\"><div class=\"kpi-label\">Mode</div><div class=\"kpi-value\">Realtime suggest</div></div>
+		  <div class=\"kpi\"><div class=\"kpi-label\">Access</div><div class=\"kpi-value\">Employee session</div></div>
+		  <div class=\"kpi\"><div class=\"kpi-label\">Source</div><div class=\"kpi-value\">Google Sheet sync</div></div>
+		</div>
+	  </div>
+	</section>
+
+	<section class=\"main-card\">
+	  <div id=\"loginBox\" class=\"login-grid\">
+		<div class=\"input-shell\"><input id=\"username\" placeholder=\"Username\" /></div>
+		<div class=\"input-shell\"><input id=\"password\" type=\"password\" placeholder=\"Password\" /></div>
+		<button id=\"btnLogin\" class=\"primary\">Dang nhap</button>
 	  </div>
 
-	  <div id=\"appBox\" class=\"hide\">
+	  <div id=\"appBox\" class=\"toolbar hide\">
 		<div class=\"query-row\">
-		  <input id=\"query\" placeholder=\"Nhap keyword OTP\" />
-		  <button id=\"btnLookup\">Lay OTP</button>
+		  <div class=\"search-wrap\">
+			<div class=\"input-shell\"><input id=\"query\" placeholder=\"Nhap keyword OTP de goi y tu dong...\" autocomplete=\"off\" /></div>
+			<div id=\"suggestions\" class=\"suggest-menu hide\"></div>
+		  </div>
+		  <button id=\"btnLookup\" class=\"primary\">Lay OTP</button>
 		  <button id=\"btnLogout\" class=\"ghost\">Dang xuat</button>
 		</div>
-		<div id=\"suggestions\" class=\"suggest\"></div>
+		<div class=\"mini-help\">
+		  <div class=\"mini-chip\">Arrow up/down: chon goi y</div>
+		  <div class=\"mini-chip\">Enter: chon goi y hoac tim ngay</div>
+		  <div class=\"mini-chip\">Click vao goi y de lay OTP</div>
+		</div>
 	  </div>
 
-	  <div id=\"status\" class=\"hint\">Dang kiem tra phien...</div>
+	  <div class=\"status-bar\">
+		<div id=\"status\" class=\"status-main\">Dang kiem tra phien...</div>
+		<div class=\"status-tag\"><span class=\"live-dot\"></span> live session</div>
+	  </div>
+
+	  <div class=\"panel-head\">
+		<div class=\"panel-title\">Result stream</div>
+		<div class=\"panel-title\">OTP output</div>
+	  </div>
 	  <pre id=\"out\">San sang.</pre>
 	</section>
   </main>
@@ -404,11 +597,36 @@ def _html_page() -> str:
 	const out = document.getElementById('out');
 	const queryInput = document.getElementById('query');
 	const suggestBox = document.getElementById('suggestions');
+	const btnLookup = document.getElementById('btnLookup');
 	let suggestTimer = null;
+	let currentSuggestions = [];
+	let activeSuggestionIndex = -1;
+
+	function setOutput(text) {
+	  out.textContent = text;
+	}
+
+	function showSuggestions() {
+	  suggestBox.classList.remove('hide');
+	}
+
+	function hideSuggestions() {
+	  suggestBox.classList.add('hide');
+	  suggestBox.innerHTML = '';
+	  currentSuggestions = [];
+	  activeSuggestionIndex = -1;
+	}
+
+	function activateSuggestion(index) {
+	  activeSuggestionIndex = index;
+	  suggestBox.querySelectorAll('.suggest-item').forEach((node, idx) => {
+		node.classList.toggle('active', idx === index);
+	  });
+	}
 
 	async function checkSession() {
 	  try {
-		const res = await fetch('/api/session', {credentials:'same-origin'});
+		const res = await fetch('/api/session', { credentials:'same-origin' });
 		const d = await res.json();
 		if (d.ok && d.authenticated) {
 		  loginBox.classList.add('hide');
@@ -417,6 +635,7 @@ def _html_page() -> str:
 		} else {
 		  loginBox.classList.remove('hide');
 		  appBox.classList.add('hide');
+		  hideSuggestions();
 		  status.textContent = d.error || 'Chua dang nhap.';
 		}
 	  } catch (e) {
@@ -427,88 +646,136 @@ def _html_page() -> str:
 	async function login() {
 	  const username = document.getElementById('username').value.trim();
 	  const password = document.getElementById('password').value.trim();
-	  out.textContent = 'Dang dang nhap...';
+	  setOutput('Dang dang nhap...');
 	  const res = await fetch('/api/login', {
 		method:'POST',
 		headers:{'Content-Type':'application/json'},
 		credentials:'same-origin',
-		body: JSON.stringify({username, password})
+		body: JSON.stringify({ username, password })
 	  });
 	  const d = await res.json();
-	  out.textContent = d.ok ? 'Dang nhap thanh cong.' : (d.error || 'Dang nhap that bai');
+	  setOutput(d.ok ? 'Dang nhap thanh cong.' : (d.error || 'Dang nhap that bai'));
 	  await checkSession();
 	}
 
 	async function logout() {
-	  await fetch('/api/logout', {method:'POST', credentials:'same-origin'});
-	  out.textContent = 'Da dang xuat.';
+	  await fetch('/api/logout', { method:'POST', credentials:'same-origin' });
+	  hideSuggestions();
+	  setOutput('Da dang xuat.');
 	  await checkSession();
 	}
 
-	async function lookup() {
-	  const query = queryInput.value.trim();
+	async function lookup(forceQuery) {
+	  const query = (forceQuery || queryInput.value).trim();
 	  if (!query) {
-		out.textContent = 'Nhap query truoc.';
+		setOutput('Nhap query truoc.');
 		return;
 	  }
-	  suggestBox.innerHTML = '';
-	  out.textContent = 'Dang xu ly...';
-	  const res = await fetch('/api/getotp', {
-		method:'POST',
-		headers:{'Content-Type':'application/json'},
-		credentials:'same-origin',
-		body: JSON.stringify({query})
-	  });
-	  const d = await res.json();
-	  out.textContent = d.text || d.error || '(trong)';
-	  if (d.sessionText) status.textContent = d.sessionText;
-	  if (res.status === 401) await checkSession();
+	  queryInput.value = query;
+	  hideSuggestions();
+	  setOutput('Dang xu ly...');
+	  btnLookup.disabled = true;
+	  try {
+		const res = await fetch('/api/getotp', {
+		  method:'POST',
+		  headers:{'Content-Type':'application/json'},
+		  credentials:'same-origin',
+		  body: JSON.stringify({ query })
+		});
+		const d = await res.json();
+		setOutput(d.text || d.error || '(trong)');
+		if (d.sessionText) status.textContent = d.sessionText;
+		if (res.status === 401) await checkSession();
+	  } finally {
+		btnLookup.disabled = false;
+	  }
 	}
 
 	function renderSuggestions(items) {
-	  if (!items || !items.length) {
-		suggestBox.innerHTML = '';
+	  currentSuggestions = items || [];
+	  activeSuggestionIndex = -1;
+	  if (!currentSuggestions.length) {
+		hideSuggestions();
 		return;
 	  }
-	  suggestBox.innerHTML = items.map((item) => `<button type=\"button\" data-name=\"${item.replace(/\"/g, '&quot;')}\">${item}</button>`).join('');
-	  suggestBox.querySelectorAll('button').forEach((btn) => {
-		btn.addEventListener('click', () => {
-		  queryInput.value = btn.getAttribute('data-name') || '';
-		  suggestBox.innerHTML = '';
-		  lookup();
+	  suggestBox.innerHTML = currentSuggestions.map((item, index) => (
+		`<button type=\"button\" class=\"suggest-item\" data-index=\"${index}\" data-name=\"${item.replace(/\"/g, '&quot;')}\">`
+		+ `<span class=\"suggest-title\">${item}</span>`
+		+ `<span class=\"suggest-meta\">click de lookup ngay</span>`
+		+ `</button>`
+	  )).join('');
+	  suggestBox.querySelectorAll('.suggest-item').forEach((node) => {
+		node.addEventListener('click', () => {
+		  const name = node.getAttribute('data-name') || '';
+		  lookup(name);
 		});
 	  });
+	  showSuggestions();
 	}
 
 	async function fetchSuggestions() {
 	  const q = queryInput.value.trim();
 	  if (!q) {
-		suggestBox.innerHTML = '';
+		hideSuggestions();
 		return;
 	  }
+	  suggestBox.innerHTML = '<div class=\"suggest-item\"><span class=\"suggest-title\">Dang tim goi y...</span><span class=\"suggest-meta\">realtime</span></div>';
+	  showSuggestions();
 	  try {
-		const res = await fetch('/api/suggest?q=' + encodeURIComponent(q), {credentials:'same-origin'});
+		const res = await fetch('/api/suggest?q=' + encodeURIComponent(q), { credentials:'same-origin' });
 		if (res.status === 401) {
-		  suggestBox.innerHTML = '';
+		  hideSuggestions();
 		  await checkSession();
 		  return;
 		}
 		const data = await res.json();
 		renderSuggestions(data.items || []);
 	  } catch (e) {
-		suggestBox.innerHTML = '';
+		hideSuggestions();
 	  }
 	}
 
-	document.getElementById('btnLogin').addEventListener('click', login);
-	document.getElementById('btnLookup').addEventListener('click', lookup);
-	document.getElementById('btnLogout').addEventListener('click', logout);
-	queryInput.addEventListener('keydown', (e)=>{ if (e.key==='Enter') lookup(); });
 	queryInput.addEventListener('input', () => {
 	  if (suggestTimer) clearTimeout(suggestTimer);
-	  suggestTimer = setTimeout(fetchSuggestions, 120);
+	  suggestTimer = setTimeout(fetchSuggestions, 90);
 	});
-	document.getElementById('password').addEventListener('keydown', (e)=>{ if (e.key==='Enter') login(); });
+
+	queryInput.addEventListener('keydown', (e) => {
+	  if (!currentSuggestions.length) {
+		if (e.key === 'Enter') {
+		  e.preventDefault();
+		  lookup();
+		}
+		return;
+	  }
+	  if (e.key === 'ArrowDown') {
+		e.preventDefault();
+		activateSuggestion((activeSuggestionIndex + 1) % currentSuggestions.length);
+	  } else if (e.key === 'ArrowUp') {
+		e.preventDefault();
+		activateSuggestion(activeSuggestionIndex <= 0 ? currentSuggestions.length - 1 : activeSuggestionIndex - 1);
+	  } else if (e.key === 'Enter') {
+		e.preventDefault();
+		if (activeSuggestionIndex >= 0 && currentSuggestions[activeSuggestionIndex]) {
+		  lookup(currentSuggestions[activeSuggestionIndex]);
+		} else {
+		  lookup();
+		}
+	  } else if (e.key === 'Escape') {
+		hideSuggestions();
+	  }
+	});
+
+	document.addEventListener('click', (e) => {
+	  if (!suggestBox.contains(e.target) && e.target !== queryInput) {
+		hideSuggestions();
+	  }
+	});
+
+	document.getElementById('btnLogin').addEventListener('click', login);
+	document.getElementById('btnLookup').addEventListener('click', () => lookup());
+	document.getElementById('btnLogout').addEventListener('click', logout);
+	document.getElementById('password').addEventListener('keydown', (e) => { if (e.key === 'Enter') login(); });
 	checkSession();
   </script>
 </body></html>"""
