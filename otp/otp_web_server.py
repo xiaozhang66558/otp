@@ -96,6 +96,12 @@ if (not GOOGLE_SERVICE_ACCOUNT_JSON) and GOOGLE_SERVICE_ACCOUNT_FILE.startswith(
 	GOOGLE_SERVICE_ACCOUNT_JSON = GOOGLE_SERVICE_ACCOUNT_FILE
 	GOOGLE_SERVICE_ACCOUNT_FILE = ""
 
+# Render runs on Linux and cannot write Mac local paths like /Users/...
+if CSV_PATH.startswith("/Users/"):
+	CSV_PATH = "otp_wps.csv"
+if AUDIT_LOG_FILE.startswith("/Users/"):
+	AUDIT_LOG_FILE = ".runtime/otp_web_access.log"
+
 SESSION_COOKIE_NAME = "otp_web_session"
 SESSION_SIGNING_KEY = os.environ.get("OTP_WEB_SESSION_SIGNING_KEY", WEB_API_KEY or "change-this-session-key")
 
@@ -112,9 +118,16 @@ def _now_ts() -> int:
 
 
 def _write_audit_line(payload: Dict[str, Any]) -> None:
-	os.makedirs(os.path.dirname(os.path.abspath(AUDIT_LOG_FILE)), exist_ok=True)
-	with open(AUDIT_LOG_FILE, "a", encoding="utf-8") as f:
-		f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+	try:
+		os.makedirs(os.path.dirname(os.path.abspath(AUDIT_LOG_FILE)), exist_ok=True)
+		with open(AUDIT_LOG_FILE, "a", encoding="utf-8") as f:
+			f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+	except Exception:
+		# Never break request flow because of logging path/config issues.
+		fallback = ".runtime/otp_web_access.log"
+		os.makedirs(os.path.dirname(os.path.abspath(fallback)), exist_ok=True)
+		with open(fallback, "a", encoding="utf-8") as f:
+			f.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
 
 def _sign_token(raw_token: str) -> str:
