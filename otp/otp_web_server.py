@@ -10,9 +10,9 @@ import time
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, Optional, Set, Tuple
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
-from telegram_otp_listener import force_restore_csv_from_google_sheet, process_getotp_query
+from telegram_otp_listener import force_restore_csv_from_google_sheet, load_csv_rows, process_getotp_query
 
 
 def _bool_from_env(name: str, default: bool = True) -> bool:
@@ -212,32 +212,142 @@ def _maybe_refresh_csv_from_sheet() -> None:
 		)
 
 
+def _suggest_account_names(query: str, csv_path: str, limit: int = 8) -> list[str]:
+	query = (query or "").strip().lower()
+	if not query:
+		return []
+
+	_, rows = load_csv_rows(csv_path)
+	if not rows:
+		return []
+
+	tokens = query.split()
+	seen: Set[str] = set()
+	scored: list[tuple[tuple[int, int], str]] = []
+
+	for row in rows:
+		account_name = (row.get("Account") or "").strip()
+		if not account_name or account_name in seen:
+			continue
+		name_lower = account_name.lower()
+		if not all(token in name_lower for token in tokens):
+			continue
+		seen.add(account_name)
+		prefix_rank = 0 if name_lower.startswith(query) else 1
+		scored.append(((prefix_rank, len(account_name)), account_name))
+
+	scored.sort(key=lambda item: item[0])
+	return [name for _, name in scored[:max(limit, 1)]]
+
+
 def _html_page() -> str:
 	return """<!doctype html>
 <html lang=\"vi\"><head>
   <meta charset=\"utf-8\" />
   <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\" />
-  <title>Nefitly OTP Web</title>
+  <title>Nefitly OTP</title>
   <style>
-	body { font-family: ui-sans-serif, -apple-system, Segoe UI, sans-serif; background:#eef4f2; margin:0; padding:24px; }
-	.card { max-width: 980px; margin: 0 auto; background:#fff; border:1px solid #d7e5df; border-radius:18px; overflow:hidden; box-shadow:0 18px 48px rgba(16,24,40,.08); }
-	.head { padding:22px; background:linear-gradient(135deg,#0f766e,#0d9488); color:#fff; }
-	.head h2 { margin:0; font-size:42px; letter-spacing:.2px; }
-	.body { padding:20px; display:grid; gap:12px; }
-	.row { display:grid; grid-template-columns:1fr 1fr auto; gap:10px; }
-	input,button { border:1px solid #c6d9d1; border-radius:14px; padding:12px 14px; font-size:20px; }
-	input { background:#f8fbfa; }
-	button { background:#0f766e; color:#fff; border-color:transparent; cursor:pointer; font-weight:600; }
-	button:hover { filter:brightness(1.03); transform:translateY(-1px); }
-	.ghost { background:#fff; color:#1d2a24; border-color:#c6d9d1; }
-	.hide { display:none; }
-	.hint { color:#51645c; font-size:36px; }
-	pre { background:#fbfdfc; border:1px solid #dce9e3; border-radius:14px; padding:16px; min-height:340px; white-space:pre-wrap; font-size:38px; line-height:1.35; }
-	@media (max-width:760px){ .row { grid-template-columns:1fr; } .head h2 { font-size:34px; } .hint { font-size:28px; } pre { font-size:30px; } }
+	:root {
+	  --bg-a:#0d1a39;
+	  --bg-b:#11214b;
+	  --bg-c:#1a2f63;
+	  --card:#0f1f47cc;
+	  --line:#8ea4d133;
+	  --text:#e9f1ff;
+	  --muted:#b4c4e8;
+	  --primary:#2dd4bf;
+	  --primary-2:#38bdf8;
+	}
+	* { box-sizing:border-box; }
+	body {
+	  font-family: 'Segoe UI', 'SF Pro Text', -apple-system, sans-serif;
+	  background: radial-gradient(1200px 700px at 10% 5%, #1c3270 0%, transparent 50%),
+	              radial-gradient(1000px 600px at 90% 90%, #0a2556 0%, transparent 55%),
+	              linear-gradient(145deg, var(--bg-a), var(--bg-b) 45%, var(--bg-c));
+	  color: var(--text);
+	  margin: 0;
+	  min-height: 100vh;
+	  padding: 22px;
+	}
+	.card {
+	  max-width: 980px;
+	  margin: 0 auto;
+	  background: var(--card);
+	  border: 1px solid var(--line);
+	  border-radius: 20px;
+	  overflow: hidden;
+	  box-shadow: 0 24px 70px rgba(1, 8, 30, .45);
+	}
+	.head {
+	  padding: 24px;
+	  background: linear-gradient(120deg, rgba(45,212,191,.22), rgba(56,189,248,.12));
+	  border-bottom: 1px solid var(--line);
+	}
+	.head h2 { margin: 0; font-size: 36px; letter-spacing: .2px; }
+	.sub { margin-top: 8px; color: var(--muted); font-size: 14px; }
+	.body { padding: 20px; display: grid; gap: 12px; }
+	.row { display: grid; grid-template-columns: 1fr 1fr auto; gap: 10px; }
+	.query-row { display: grid; grid-template-columns: 1fr auto auto; gap: 10px; }
+	input, button {
+	  border-radius: 14px;
+	  padding: 12px 14px;
+	  font-size: 19px;
+	}
+	input {
+	  border: 1px solid #89a6db55;
+	  background: #f4f8ff;
+	  color: #0f172a;
+	}
+	button {
+	  border: none;
+	  cursor: pointer;
+	  color: #03111f;
+	  background: linear-gradient(120deg, var(--primary), var(--primary-2));
+	  font-weight: 700;
+	}
+	button:hover { transform: translateY(-1px); filter: brightness(1.04); }
+	.ghost {
+	  background: #dbeafe;
+	  color: #1e293b;
+	}
+	.hide { display: none; }
+	.hint {
+	  color: #dbeafe;
+	  font-size: 30px;
+	}
+	.suggest {
+	  margin-top: -2px;
+	  display: grid;
+	  gap: 8px;
+	}
+	.suggest button {
+	  text-align: left;
+	  font-size: 17px;
+	  border-radius: 12px;
+	  background: #dbeafe;
+	  color: #0f172a;
+	}
+	pre {
+	  background: #0a1738cc;
+	  border: 1px solid var(--line);
+	  color: #eff6ff;
+	  border-radius: 14px;
+	  padding: 16px;
+	  min-height: 300px;
+	  white-space: pre-wrap;
+	  font-size: 30px;
+	  line-height: 1.35;
+	}
+	@media (max-width: 760px) {
+	  .row, .query-row { grid-template-columns: 1fr; }
+	  .head h2 { font-size: 30px; }
+	  .hint { font-size: 24px; }
+	  pre { font-size: 24px; min-height: 260px; }
+	}
   </style>
 </head><body>
   <main class=\"card\">
-	<section class=\"head\"><h2>OTP Web Lookup</h2></section>
+	<section class=\"head\"><h2>OTP Web Lookup</h2><div class=\"sub\">Tra cuu OTP nhanh, go den dau goi y den do</div></section>
 	<section class=\"body\">
 	  <div id=\"loginBox\" class=\"row\">
 		<input id=\"username\" placeholder=\"Username\" />
@@ -246,11 +356,12 @@ def _html_page() -> str:
 	  </div>
 
 	  <div id=\"appBox\" class=\"hide\">
-		<div class=\"row\">
+		<div class=\"query-row\">
 		  <input id=\"query\" placeholder=\"Nhap keyword OTP\" />
 		  <button id=\"btnLookup\">Lay OTP</button>
 		  <button id=\"btnLogout\" class=\"ghost\">Dang xuat</button>
 		</div>
+		<div id=\"suggestions\" class=\"suggest\"></div>
 	  </div>
 
 	  <div id=\"status\" class=\"hint\">Dang kiem tra phien...</div>
@@ -263,6 +374,9 @@ def _html_page() -> str:
 	const appBox = document.getElementById('appBox');
 	const status = document.getElementById('status');
 	const out = document.getElementById('out');
+	const queryInput = document.getElementById('query');
+	const suggestBox = document.getElementById('suggestions');
+	let suggestTimer = null;
 
 	async function checkSession() {
 	  try {
@@ -304,11 +418,12 @@ def _html_page() -> str:
 	}
 
 	async function lookup() {
-	  const query = document.getElementById('query').value.trim();
+	  const query = queryInput.value.trim();
 	  if (!query) {
 		out.textContent = 'Nhap query truoc.';
 		return;
 	  }
+	  suggestBox.innerHTML = '';
 	  out.textContent = 'Dang xu ly...';
 	  const res = await fetch('/api/getotp', {
 		method:'POST',
@@ -322,10 +437,49 @@ def _html_page() -> str:
 	  if (res.status === 401) await checkSession();
 	}
 
+	function renderSuggestions(items) {
+	  if (!items || !items.length) {
+		suggestBox.innerHTML = '';
+		return;
+	  }
+	  suggestBox.innerHTML = items.map((item) => `<button type=\"button\" data-name=\"${item.replace(/\"/g, '&quot;')}\">${item}</button>`).join('');
+	  suggestBox.querySelectorAll('button').forEach((btn) => {
+		btn.addEventListener('click', () => {
+		  queryInput.value = btn.getAttribute('data-name') || '';
+		  suggestBox.innerHTML = '';
+		  lookup();
+		});
+	  });
+	}
+
+	async function fetchSuggestions() {
+	  const q = queryInput.value.trim();
+	  if (!q) {
+		suggestBox.innerHTML = '';
+		return;
+	  }
+	  try {
+		const res = await fetch('/api/suggest?q=' + encodeURIComponent(q), {credentials:'same-origin'});
+		if (res.status === 401) {
+		  suggestBox.innerHTML = '';
+		  await checkSession();
+		  return;
+		}
+		const data = await res.json();
+		renderSuggestions(data.items || []);
+	  } catch (e) {
+		suggestBox.innerHTML = '';
+	  }
+	}
+
 	document.getElementById('btnLogin').addEventListener('click', login);
 	document.getElementById('btnLookup').addEventListener('click', lookup);
 	document.getElementById('btnLogout').addEventListener('click', logout);
-	document.getElementById('query').addEventListener('keydown', (e)=>{ if (e.key==='Enter') lookup(); });
+	queryInput.addEventListener('keydown', (e)=>{ if (e.key==='Enter') lookup(); });
+	queryInput.addEventListener('input', () => {
+	  if (suggestTimer) clearTimeout(suggestTimer);
+	  suggestTimer = setTimeout(fetchSuggestions, 120);
+	});
 	document.getElementById('password').addEventListener('keydown', (e)=>{ if (e.key==='Enter') login(); });
 	checkSession();
   </script>
@@ -431,6 +585,24 @@ class OTPWebHandler(BaseHTTPRequestHandler):
 					"sessionText": self._session_text(session),
 				},
 			)
+			return
+		if parsed.path == "/api/suggest":
+			ip = self._client_ip()
+			if not self._is_ip_allowed(ip):
+				self._send_json(403, {"ok": False, "items": [], "error": "ip not allowed"})
+				return
+			if not _is_time_window_allowed():
+				self._send_json(403, {"ok": False, "items": [], "error": "outside allowed time"})
+				return
+			session = self._current_session()
+			if WEB_REQUIRE_KEY and not session:
+				self._send_json(401, {"ok": False, "items": [], "error": "unauthorized"})
+				return
+			params = parse_qs(parsed.query or "")
+			query = (params.get("q") or [""])[0]
+			_maybe_refresh_csv_from_sheet()
+			items = _suggest_account_names(query, CSV_PATH, 8)
+			self._send_json(200, {"ok": True, "items": items})
 			return
 		self._send_json(404, {"ok": False, "error": "not found"})
 
