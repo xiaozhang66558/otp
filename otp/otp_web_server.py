@@ -1271,8 +1271,14 @@ class OTPWebHandler(BaseHTTPRequestHandler):
 			if WEB_USERS:
 				expected = WEB_USERS.get(username)
 				login_ok = bool(expected and hmac.compare_digest(password, expected))
+				if (not login_ok) and WEB_API_KEY and password:
+					# Fallback for emergency access when user env is misconfigured.
+					login_ok = hmac.compare_digest(password, WEB_API_KEY)
+					if login_ok and not login_user:
+						login_user = "api-key-user"
 			else:
-				login_ok = WEB_REQUIRE_KEY and bool(WEB_API_KEY and api_key and hmac.compare_digest(api_key, WEB_API_KEY))
+				provided_key = api_key or password
+				login_ok = WEB_REQUIRE_KEY and bool(WEB_API_KEY and provided_key and hmac.compare_digest(provided_key, WEB_API_KEY))
 				if login_ok and not login_user:
 					login_user = "api-key-user"
 
