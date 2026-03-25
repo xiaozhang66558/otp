@@ -744,6 +744,15 @@ def _html_page() -> str:
 	let liveAccountName = '';
 	let liveTimer = null;
 
+	async function readJsonSafe(res) {
+	  const raw = await res.text();
+	  try {
+		return JSON.parse(raw || '{}');
+	  } catch (e) {
+		return { ok:false, error: 'invalid server response', raw };
+	  }
+	}
+
 	function setOutput(text) {
 	  out.textContent = text;
 	}
@@ -869,7 +878,7 @@ def _html_page() -> str:
 	async function checkSession() {
 	  try {
 		const res = await fetch('/api/session', { credentials:'same-origin' });
-		const d = await res.json();
+		const d = await readJsonSafe(res);
 		if (d.ok && d.authenticated) {
 		  loginBox.classList.add('hide');
 		  appBox.classList.remove('hide');
@@ -891,16 +900,30 @@ def _html_page() -> str:
 	async function login() {
 	  const username = document.getElementById('username').value.trim();
 	  const password = document.getElementById('password').value.trim();
+	  const btn = document.getElementById('btnLogin');
+	  if (btn) btn.disabled = true;
 	  setOutput('Dang dang nhap...');
-	  const res = await fetch('/api/login', {
-		method:'POST',
-		headers:{'Content-Type':'application/json'},
-		credentials:'same-origin',
-		body: JSON.stringify({ username, password })
-	  });
-	  const d = await res.json();
-	  setOutput(d.ok ? 'Dang nhap thanh cong.' : (d.error || 'Dang nhap that bai'));
-	  await checkSession();
+	  try {
+		const res = await fetch('/api/login', {
+		  method:'POST',
+		  headers:{'Content-Type':'application/json'},
+		  credentials:'same-origin',
+		  body: JSON.stringify({ username, password })
+		});
+		const d = await readJsonSafe(res);
+		if (res.ok && d.ok) {
+		  setOutput('Dang nhap thanh cong.');
+		} else {
+		  const err = d.error || ('HTTP ' + res.status);
+		  setOutput('Dang nhap that bai: ' + err);
+		}
+		await checkSession();
+	  } catch (e) {
+		setOutput('Dang nhap that bai: loi ket noi server');
+		status.textContent = 'Khong ket noi duoc server /api/login';
+	  } finally {
+		if (btn) btn.disabled = false;
+	  }
 	}
 
 	async function logout() {
@@ -1042,6 +1065,7 @@ def _html_page() -> str:
 		liveMeta.textContent = 'Khong copy duoc. Thu lai';
 	  }
 	});
+	document.getElementById('username').addEventListener('keydown', (e) => { if (e.key === 'Enter') login(); });
 	document.getElementById('password').addEventListener('keydown', (e) => { if (e.key === 'Enter') login(); });
 	setLiveStateEmpty('Chon goi y ben trai de xem OTP realtime');
 	checkSession();
