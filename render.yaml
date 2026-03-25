@@ -31,9 +31,9 @@ services:
         sync: false
       - key: GOOGLE_SHEET_ID
         sync: false
-      - key: GOOGLE_SHEET_NAME
-        value: OTP
-      - key: GOOGLE_SERVICE_ACCOUNT_FILE
+      - key: GOOGLE_SHEET_GID
+        sync: false
+      - key: GOOGLE_SERVICE_ACCOUNT_JSON
         sync: false
       - key: OTP_WEB_WPS_FILE
         value: /opt/render/project/src/otp_wps.csv
