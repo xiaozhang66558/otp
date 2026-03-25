@@ -501,7 +501,8 @@ def _html_page() -> str:
 	}
 	.suggest-item {
 	  display: grid;
-	  gap: 4px;
+	  grid-template-columns: 1fr auto;
+	  gap: 4px 12px;
 	  text-align: left;
 	  border-radius: 14px;
 	  padding: 14px 16px;
@@ -516,6 +517,24 @@ def _html_page() -> str:
 	}
 	.suggest-title { font-size: 18px; font-weight: 700; }
 	.suggest-meta { font-size: 12px; color: #bcd1f2; text-transform: uppercase; letter-spacing: .08em; }
+	.suggest-main { display: grid; gap: 4px; }
+	.suggest-live {
+	  align-self: center;
+	  justify-self: end;
+	  min-width: 104px;
+	  text-align: right;
+	}
+	.suggest-otp {
+	  font-size: 24px;
+	  letter-spacing: .08em;
+	  font-weight: 800;
+	  color: #f1f8ff;
+	}
+	.suggest-sec {
+	  margin-top: 2px;
+	  font-size: 12px;
+	  color: #a9c4ee;
+	}
 	.panel-head {
 	  display: flex;
 	  align-items: center;
@@ -719,6 +738,7 @@ def _html_page() -> str:
 	const liveSec = document.getElementById('liveSec');
 	const btnCopyLive = document.getElementById('btnCopyLive');
 	let suggestTimer = null;
+	let suggestOtpTimer = null;
 	let currentSuggestions = [];
 	let activeSuggestionIndex = -1;
 	let liveAccountName = '';
@@ -802,6 +822,8 @@ def _html_page() -> str:
 	  suggestBox.innerHTML = '';
 	  currentSuggestions = [];
 	  activeSuggestionIndex = -1;
+	  if (suggestOtpTimer) clearInterval(suggestOtpTimer);
+	  suggestOtpTimer = null;
 	}
 
 	function activateSuggestion(index) {
@@ -809,6 +831,39 @@ def _html_page() -> str:
 	  suggestBox.querySelectorAll('.suggest-item').forEach((node, idx) => {
 		node.classList.toggle('active', idx === index);
 	  });
+	  if (index >= 0 && currentSuggestions[index]) {
+		startLiveOtp(currentSuggestions[index]);
+	  }
+	}
+
+	async function refreshSuggestionOtps() {
+	  if (!currentSuggestions.length || suggestBox.classList.contains('hide')) return;
+	  try {
+		const params = new URLSearchParams();
+		for (const name of currentSuggestions) params.append('account', name);
+		const res = await fetch('/api/otp-live-batch?' + params.toString(), { credentials:'same-origin' });
+		if (res.status === 401) {
+		  hideSuggestions();
+		  await checkSession();
+		  return;
+		}
+		const d = await res.json();
+		if (!d.ok || !Array.isArray(d.items)) return;
+		d.items.forEach((item, idx) => {
+		  const otpNode = suggestBox.querySelector('.suggest-otp[data-index="' + idx + '"]');
+		  const secNode = suggestBox.querySelector('.suggest-sec[data-index="' + idx + '"]');
+		  if (!otpNode || !secNode) return;
+		  if (item && item.ok) {
+			otpNode.textContent = String(item.code || '------');
+			secNode.textContent = String(Math.max(0, Number(item.remaining || 0))) + 's';
+		  } else {
+			otpNode.textContent = '------';
+			secNode.textContent = '--';
+		  }
+		});
+	  } catch (e) {
+		// Keep UI responsive if batch live fetch fails.
+	  }
 	}
 
 	async function checkSession() {
@@ -896,8 +951,8 @@ def _html_page() -> str:
 	  }
 	  suggestBox.innerHTML = currentSuggestions.map((item, index) => (
 		`<button type=\"button\" class=\"suggest-item\" data-index=\"${index}\" data-name=\"${item.replace(/\"/g, '&quot;')}\">`
-		+ `<span class=\"suggest-title\">${item}</span>`
-		+ `<span class=\"suggest-meta\">click de lookup ngay</span>`
+		+ `<span class=\"suggest-main\"><span class=\"suggest-title\">${item}</span><span class=\"suggest-meta\">click de lookup ngay</span></span>`
+		+ `<span class=\"suggest-live\"><span class=\"suggest-otp\" data-index=\"${index}\">------</span><span class=\"suggest-sec\" data-index=\"${index}\">--</span></span>`
 		+ `</button>`
 	  )).join('');
 	  suggestBox.querySelectorAll('.suggest-item').forEach((node) => {
@@ -908,6 +963,10 @@ def _html_page() -> str:
 		});
 	  });
 	  showSuggestions();
+	  activateSuggestion(0);
+	  refreshSuggestionOtps();
+	  if (suggestOtpTimer) clearInterval(suggestOtpTimer);
+	  suggestOtpTimer = setInterval(refreshSuggestionOtps, 1000);
 	}
 
 	async function fetchSuggestions() {
@@ -954,6 +1013,7 @@ def _html_page() -> str:
 	  } else if (e.key === 'Enter') {
 		e.preventDefault();
 		if (activeSuggestionIndex >= 0 && currentSuggestions[activeSuggestionIndex]) {
+		  startLiveOtp(currentSuggestions[activeSuggestionIndex]);
 		  lookup(currentSuggestions[activeSuggestionIndex]);
 		} else {
 		  lookup();
@@ -1144,6 +1204,44 @@ class OTPWebHandler(BaseHTTPRequestHandler):
 					"sessionText": self._session_text(session or {}),
 				},
 			)
+			return
+		if parsed.path == "/api/otp-live-batch":
+			ip = self._client_ip()
+			if not self._is_ip_allowed(ip):
+				self._send_json(403, {"ok": False, "items": [], "error": "ip not allowed"})
+				return
+			if not _is_time_window_allowed():
+				self._send_json(403, {"ok": False, "items": [], "error": "outside allowed time"})
+				return
+			session = self._current_session()
+			if WEB_REQUIRE_KEY and not session:
+				self._send_json(401, {"ok": False, "items": [], "error": "unauthorized"})
+				return
+			params = parse_qs(parsed.query or "")
+			accounts = [a.strip() for a in (params.get("account") or []) if a.strip()]
+			if not accounts:
+				self._send_json(200, {"ok": True, "items": []})
+				return
+			accounts = accounts[:8]
+			_maybe_refresh_csv_from_sheet()
+			items = []
+			for account in accounts:
+				secret, err = _find_secret_by_account(account, CSV_PATH)
+				if not secret:
+					items.append({"ok": False, "account": account, "error": err or "account not found"})
+					continue
+				code, remaining = generate_totp_code(secret)
+				if not code:
+					items.append({"ok": False, "account": account, "error": "invalid secret"})
+					continue
+				items.append({
+					"ok": True,
+					"account": account,
+					"code": code,
+					"remaining": int(remaining or 0),
+					"period": 30,
+				})
+			self._send_json(200, {"ok": True, "items": items, "sessionText": self._session_text(session or {})})
 			return
 		self._send_json(404, {"ok": False, "error": "not found"})
 
