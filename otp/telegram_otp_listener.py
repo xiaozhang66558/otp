@@ -24,8 +24,11 @@ import errno
 import hmac
 import hashlib
 import json
+import mimetypes
 import os
 import random
+import re
+import socket
 import shutil
 import ssl
 import struct
@@ -39,6 +42,10 @@ import urllib.parse
 import urllib.request
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Set, Tuple
+try:
+    import numpy as np
+except ImportError:
+    np = None
 
 
 OUTBOUND_DEDUPE_FILE = ""
@@ -91,8 +98,14 @@ def load_otp_modules():
     try:
         from pyzbar.pyzbar import decode
     except Exception:
-        print("❌ Thiếu pyzbar. Cài: pip install pyzbar")
-        raise SystemExit(1)
+        print("⚠️ pyzbar không khả dụng (thiếu libzbar), dùng zxing-cpp thay thế.", flush=True)
+        decode = None
+
+    try:
+        import zxingcpp as _zxingcpp
+        zxing_read_barcodes = _zxingcpp.read_barcodes
+    except Exception:
+        zxing_read_barcodes = None
 
     try:
         import otp_pb2
@@ -100,7 +113,7 @@ def load_otp_modules():
         print("❌ Thiếu otp_pb2.py")
         raise SystemExit(1)
 
-    return cv2, decode, otp_pb2
+    return cv2, decode, otp_pb2, zxing_read_barcodes
 
 
 def b64decode_urlsafe_padded(data_str: str) -> bytes:
@@ -186,6 +199,20 @@ def load_existing_account_names(csv_path: str) -> Set[str]:
             if account:
                 names.add(account)
     return names
+
+
+def load_existing_secrets(csv_path: str) -> Set[str]:
+    if not os.path.exists(csv_path):
+        return set()
+
+    secrets: Set[str] = set()
+    with open(csv_path, "r", newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            secret = (row.get("Secret") or "").strip().replace("=", "").replace(" ", "").upper()
+            if secret:
+                secrets.add(secret)
+    return secrets
 
 
 def load_csv_rows(csv_path: str) -> Tuple[List[str], List[Dict[str, str]]]:
@@ -1173,7 +1200,9 @@ def parse_qr_records(text: str) -> Tuple[List[Dict[str, str]], List[str]]:
         records.append(
             {
                 "account": account,
+                "issuer": account.split(":", 1)[0].strip() if ":" in account else "",
                 "secret": secret.replace("=", "").replace(" ", "").upper(),
+                "secret_bytes_len": len(secret_bytes),
             }
         )
 
@@ -1185,22 +1214,56 @@ def build_qr_migration_uri(records: List[Dict[str, str]]) -> str:
 
     payload = otp_pb2.MigrationPayload()
     payload.version = 1
-    payload.batch_size = len(records)
+    payload.batch_size = 1
     payload.batch_index = 0
     payload.batch_id = random.randint(100000, 999999)
 
     for rec in records:
         otp = payload.otp_parameters.add()
         otp.secret = b32decode_no_padding(rec.get("secret", "")) or b""
-        otp.name = rec.get("account", "")
-        otp.issuer = ""
+        account_raw = (rec.get("account") or "").strip()
+        issuer = (rec.get("issuer") or "").strip()
+        name = account_raw
+
+        # Nếu chưa có issuer nhưng account có dạng "issuer account", tách để payload gọn hơn.
+        if not issuer and " " in account_raw:
+            parts = [p for p in account_raw.split(" ") if p]
+            if len(parts) >= 2:
+                issuer = parts[0].strip()
+                name = " ".join(parts[1:]).strip()
+
+        otp.name = name
+        otp.issuer = issuer
         otp.algorithm = otp_pb2.MigrationPayload.SHA1
         otp.digits = otp_pb2.MigrationPayload.SIX
         otp.type = otp_pb2.MigrationPayload.TOTP
 
     raw = payload.SerializeToString()
+    # Dùng đúng kiểu dữ liệu migration phổ biến của Google Auth: base64url không padding.
     encoded = base64.urlsafe_b64encode(raw).decode("utf-8").rstrip("=")
     return f"otpauth-migration://offline?data={encoded}"
+
+
+def build_standard_otpauth_uri(record: Dict[str, str]) -> str:
+    from urllib.parse import quote
+
+    account = (record.get("account") or "OTP").strip()
+    issuer = (record.get("issuer") or "").strip()
+    if not issuer and " " in account:
+        parts = [p for p in account.split(" ") if p]
+        if len(parts) >= 2:
+            issuer = parts[0].strip()
+            account = " ".join(parts[1:]).strip()
+    secret = (record.get("secret") or "").strip().replace("=", "").replace(" ", "").upper()
+
+    if issuer:
+        label = f"{issuer}:{account}"
+    else:
+        label = account
+    uri = f"otpauth://totp/{quote(label, safe='')}?secret={quote(secret, safe='')}"
+    if issuer:
+        uri += f"&issuer={quote(issuer, safe='')}"
+    return uri
 
 
 def create_qr_png_from_text(content: str) -> str:
@@ -1209,39 +1272,105 @@ def create_qr_png_from_text(content: str) -> str:
     except Exception:
         raise RuntimeError("Thiếu thư viện qrcode. Cài: pip install qrcode[pil]")
 
-    qr = qrcode.QRCode(version=None, box_size=10, border=2)
+    # Với QR migration nhiều dữ liệu, giảm ECC để hạ mật độ module giúp iPhone quét dễ hơn.
+    qr = qrcode.QRCode(version=None, error_correction=qrcode.constants.ERROR_CORRECT_L, box_size=16, border=6)
     qr.add_data(content)
     qr.make(fit=True)
+    if qr.version is not None and qr.version >= 28:
+        raise RuntimeError(
+            "QR chứa quá nhiều OTP (mã quá dày). Hãy giảm số dòng /qr xuống ít hơn để iPhone quét được."
+        )
     img = qr.make_image(fill_color="black", back_color="white")
 
-    tmp_file = tempfile.NamedTemporaryFile(prefix="otp_migration_", suffix=".png", delete=False)
+    # Chuẩn hóa ảnh về RGB để Telegram hiển thị ổn định.
+    if hasattr(img, "convert"):
+        img = img.convert("RGB")
+
+    tmp_file = tempfile.NamedTemporaryFile(prefix="otp_qr_", suffix=".png", delete=False)
     tmp_path = tmp_file.name
     tmp_file.close()
     img.save(tmp_path)
     return tmp_path
 
 
-def process_qr_command(text: str) -> Tuple[str, bool, Optional[str]]:
+def build_qr_pdf_document(qr_paths: List[str], records: List[Dict[str, str]]) -> str:
+    try:
+        from PIL import Image, ImageDraw
+    except Exception:
+        raise RuntimeError("Thiếu Pillow để tạo PDF QR. Cài: pip install pillow")
+
+    pages: List[Any] = []
+    for idx, qr_path in enumerate(qr_paths):
+        qr_img = Image.open(qr_path).convert("RGB")
+        page = Image.new("RGB", (1240, 1754), "white")
+        draw = ImageDraw.Draw(page)
+
+        account = (records[idx].get("account") or f"OTP {idx + 1}").strip()
+        secret = (records[idx].get("secret") or "").strip()
+        draw.text((80, 70), f"OTP {idx + 1}/{len(records)}", fill="black")
+        draw.text((80, 120), account, fill="black")
+        draw.text((80, 170), secret, fill="black")
+
+        qr_size = 900
+        qr_img = qr_img.resize((qr_size, qr_size))
+        x = (page.width - qr_size) // 2
+        y = 260
+        page.paste(qr_img, (x, y))
+        pages.append(page)
+
+    if not pages:
+        raise RuntimeError("Không có QR để tạo PDF")
+
+    tmp_file = tempfile.NamedTemporaryFile(prefix="otp_qr_bundle_", suffix=".pdf", delete=False)
+    tmp_path = tmp_file.name
+    tmp_file.close()
+    first_page = pages[0]
+    other_pages = pages[1:]
+    first_page.save(tmp_path, save_all=True, append_images=other_pages)
+    return tmp_path
+
+
+def process_qr_command(text: str) -> Tuple[str, bool, List[str]]:
     records, errors = parse_qr_records(text)
     if errors and not records:
-        return "❌ Lỗi lệnh /qr:\n- " + "\n- ".join(errors), False, None
+        return "❌ Lỗi lệnh /qr:\n- " + "\n- ".join(errors), False, []
 
     if not records:
-        return "❌ Không có bản ghi hợp lệ để tạo QR", False, None
+        return "❌ Không có bản ghi hợp lệ để tạo QR", False, []
+
+    max_records_per_request = 50
+    if len(records) > max_records_per_request:
+        return (
+            f"❌ Chỉ hỗ trợ tối đa {max_records_per_request} OTP trong 1 lần tạo QR. "
+            f"Bạn đang gửi {len(records)} OTP.",
+            False,
+            [],
+        )
 
     try:
-        uri = build_qr_migration_uri(records)
-        qr_path = create_qr_png_from_text(uri)
+        if len(records) == 1:
+            qr_paths = [create_qr_png_from_text(build_standard_otpauth_uri(records[0]))]
+        else:
+            qr_paths = [create_qr_png_from_text(build_standard_otpauth_uri(record)) for record in records]
     except Exception as e:
-        return f"❌ Không tạo được QR: {e}", False, None
+        return f"❌ Không tạo được QR: {e}", False, []
 
     lines: List[str] = []
-    lines.append("✅ Đã tạo QR migration")
-    lines.append(f"📦 Số OTP trong QR: {len(records)}")
+    if len(records) == 1:
+        lines.append("✅ Đã tạo 1 QR chuẩn otpauth (iPhone quét ổn định)")
+    else:
+        lines.append("✅ Đã tách thành nhiều QR chuẩn otpauth để ảnh nhẹ và dễ quét hơn")
+    lines.append(f"📦 Số OTP: {len(records)}")
+    if len(records) > 1:
+        lines.append(f"🧩 Số ảnh QR: {len(qr_paths)}")
+    lines.append("📌 Giới hạn hiện tại: tối đa 50 OTP / lần tạo")
     if errors:
         lines.append(f"⚠️ Bỏ qua dòng lỗi: {len(errors)}")
-    lines.append("Mở Google Authenticator để quét QR này.")
-    return "\n".join(lines), True, qr_path
+    if len(records) > 1:
+        lines.append("Trên iPhone: quét từng ảnh QR, mỗi ảnh tương ứng 1 OTP.")
+    else:
+        lines.append("Trên iPhone: mở Google Authenticator và quét ảnh QR bot gửi trực tiếp trong chat.")
+    return "\n".join(lines), True, qr_paths
 
 
 def normalize_permission_target(raw_target: str) -> Tuple[str, str]:
@@ -1405,7 +1534,7 @@ def parse_otpauth_uri(qr_data: str) -> Optional[Dict[str, str]]:
 
 
 def extract_otps_from_qr_image(image_path: str) -> List[Dict[str, str]]:
-    cv2, decode, otp_pb2 = load_otp_modules()
+    cv2, decode, otp_pb2, zxing_read_barcodes = load_otp_modules()
 
     img = cv2.imread(image_path)
     if img is None:
@@ -1423,42 +1552,64 @@ def extract_otps_from_qr_image(image_path: str) -> List[Dict[str, str]]:
         seen_qr_texts.add(text_norm)
         qr_texts.append(text_norm)
 
-    # First pass with pyzbar on several image variants.
+    # Build image variants for multi-pass decoding.
+    # Telegram compresses photos to ~1280px which blurs dense QR — upscale to recover detail.
     variants = [img]
     try:
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        variants.append(gray)
-        variants.append(cv2.GaussianBlur(gray, (3, 3), 0))
-        variants.append(cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 31, 2))
         h, w = gray.shape[:2]
+        variants.append(gray)
+        kernel_sharpen = np.array([[-1, -1, -1], [-1, 9, -1], [-1, -1, -1]])
+        variants.append(cv2.filter2D(gray, -1, kernel_sharpen))
+        variants.append(cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 31, 2))
         if h > 0 and w > 0:
-            variants.append(cv2.resize(gray, (w * 2, h * 2), interpolation=cv2.INTER_CUBIC))
+            up2 = cv2.resize(gray, (w * 2, h * 2), interpolation=cv2.INTER_CUBIC)
+            variants.append(up2)
+            variants.append(cv2.filter2D(up2, -1, kernel_sharpen))
+            variants.append(cv2.resize(gray, (w * 3, h * 3), interpolation=cv2.INTER_CUBIC))
     except Exception:
         pass
 
-    for variant in variants:
-        try:
-            decoded_objs = decode(variant)
-        except Exception:
-            decoded_objs = []
-        for obj in decoded_objs:
+    # Pass 1: pyzbar (best accuracy, needs libzbar system lib).
+    if decode is not None:
+        for variant in variants:
             try:
-                _collect_qr_text(obj.data.decode("utf-8", errors="replace"))
+                decoded_objs = decode(variant)
             except Exception:
-                continue
+                decoded_objs = []
+            for obj in decoded_objs:
+                try:
+                    _collect_qr_text(obj.data.decode("utf-8", errors="replace"))
+                except Exception:
+                    continue
 
-    # Second pass with OpenCV detector as fallback.
-    try:
-        detector = cv2.QRCodeDetector()
-        ok_multi, decoded_multi, _, _ = detector.detectAndDecodeMulti(img)
-        if ok_multi and decoded_multi:
-            for item in decoded_multi:
-                _collect_qr_text(item)
-        else:
-            decoded_single, _, _ = detector.detectAndDecode(img)
-            _collect_qr_text(decoded_single)
-    except Exception:
-        pass
+    # Pass 2: zxing-cpp (very good accuracy, pure Python wheel, no system deps).
+    if zxing_read_barcodes is not None and not qr_texts:
+        try:
+            import zxingcpp
+            for variant in variants:
+                try:
+                    results = zxing_read_barcodes(variant, formats=zxingcpp.BarcodeFormat.QRCode)
+                    for r in results:
+                        _collect_qr_text(r.text)
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
+    # Pass 3: OpenCV QRCodeDetector (last resort).
+    if not qr_texts:
+        try:
+            detector = cv2.QRCodeDetector()
+            ok_multi, decoded_multi, _, _ = detector.detectAndDecodeMulti(img)
+            if ok_multi and decoded_multi:
+                for item in decoded_multi:
+                    _collect_qr_text(item)
+            else:
+                decoded_single, _, _ = detector.detectAndDecode(img)
+                _collect_qr_text(decoded_single)
+        except Exception:
+            pass
 
     if not qr_texts:
         return []
@@ -1504,16 +1655,65 @@ def extract_otps_from_qr_image(image_path: str) -> List[Dict[str, str]]:
     return otp_list
 
 
+def _is_transient_network_error(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    if isinstance(exc, urllib.error.HTTPError):
+        return False
+    if isinstance(exc, (TimeoutError, socket.timeout, ConnectionResetError)):
+        return True
+    transient_markers = [
+        "connection reset by peer",
+        "connection reset",
+        "temporarily unavailable",
+        "timed out",
+        "timeout",
+        "remote end closed connection",
+        "unexpected eof",
+        "network is unreachable",
+        "connection aborted",
+        "connection refused",
+    ]
+    return any(marker in msg for marker in transient_markers)
+
+
+def _urlopen_bytes_with_ssl_fallback(
+    req: urllib.request.Request,
+    timeout: int = 30,
+    retries: int = 3,
+    retry_delay: float = 1.0,
+) -> bytes:
+    use_insecure_ctx = False
+    last_error: Optional[Exception] = None
+
+    for attempt in range(1, max(int(retries), 1) + 1):
+        try:
+            if use_insecure_ctx:
+                insecure_ctx = ssl._create_unverified_context()
+                with urllib.request.urlopen(req, timeout=timeout, context=insecure_ctx) as resp:
+                    return resp.read()
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return resp.read()
+        except Exception as e:
+            last_error = e
+            if (not use_insecure_ctx) and "CERTIFICATE_VERIFY_FAILED" in str(e):
+                use_insecure_ctx = True
+                continue
+            if attempt >= retries or not _is_transient_network_error(e):
+                raise
+            wait_seconds = retry_delay * attempt
+            print(
+                f"[WARN] Telegram network error, retry {attempt}/{retries} after {wait_seconds:.1f}s: {type(e).__name__}: {e}",
+                flush=True,
+            )
+            time.sleep(wait_seconds)
+
+    if last_error:
+        raise last_error
+    raise RuntimeError("Không thể mở kết nối")
+
+
 def _urlopen_with_ssl_fallback(req: urllib.request.Request, timeout: int = 30) -> str:
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return resp.read().decode("utf-8", errors="replace")
-    except Exception as e:
-        if "CERTIFICATE_VERIFY_FAILED" in str(e):
-            insecure_ctx = ssl._create_unverified_context()
-            with urllib.request.urlopen(req, timeout=timeout, context=insecure_ctx) as resp:
-                return resp.read().decode("utf-8", errors="replace")
-        raise
+    return _urlopen_bytes_with_ssl_fallback(req, timeout=timeout).decode("utf-8", errors="replace")
 
 
 class TelegramAPIError(Exception):
@@ -1524,33 +1724,71 @@ class TelegramAPIError(Exception):
         super().__init__(f"Telegram API {method} failed ({self.status_code}): {self.description}")
 
 
+def _extract_retry_after_seconds(description: str) -> Optional[float]:
+    match = re.search(r"retry after\s+(\d+(?:\.\d+)?)", description or "", re.IGNORECASE)
+    if not match:
+        return None
+    try:
+        return max(float(match.group(1)), 0.0)
+    except Exception:
+        return None
+
+
 def telegram_api(bot_token: str, method: str, payload: Dict[str, str]) -> Dict:
     url = f"https://api.telegram.org/bot{bot_token}/{method}"
     data = urllib.parse.urlencode(payload).encode("utf-8")
     req = urllib.request.Request(url, data=data, method="POST")
     req.add_header("Content-Type", "application/x-www-form-urlencoded")
-    try:
-        raw = _urlopen_with_ssl_fallback(req, timeout=40)
-        parsed = json.loads(raw)
-        if not parsed.get("ok", False):
-            desc = str(parsed.get("description", "Telegram API error"))
-            code = int(parsed.get("error_code", 400))
-            raise TelegramAPIError(method, code, desc)
-        return parsed
-    except urllib.error.HTTPError as e:
-        body = ""
+    max_attempts = 4
+    for attempt in range(1, max_attempts + 1):
         try:
-            body = e.read().decode("utf-8", errors="replace")
-        except Exception:
+            raw = _urlopen_with_ssl_fallback(req, timeout=40)
+            parsed = json.loads(raw)
+            if not parsed.get("ok", False):
+                desc = str(parsed.get("description", "Telegram API error"))
+                code = int(parsed.get("error_code", 400))
+                if code == 429 and attempt < max_attempts:
+                    retry_after = _extract_retry_after_seconds(desc)
+                    if retry_after is None:
+                        retry_after = float(attempt * 2)
+                    wait_seconds = min(max(retry_after, 1.0), 60.0)
+                    print(
+                        f"[WARN] Telegram rate limit on {method}, retry {attempt}/{max_attempts} after {wait_seconds:.1f}s: {desc}",
+                        flush=True,
+                    )
+                    time.sleep(wait_seconds)
+                    continue
+                raise TelegramAPIError(method, code, desc)
+            return parsed
+        except urllib.error.HTTPError as e:
             body = ""
+            try:
+                body = e.read().decode("utf-8", errors="replace")
+            except Exception:
+                body = ""
 
-        desc = body.strip() or str(e)
-        try:
-            parsed = json.loads(body)
-            desc = str(parsed.get("description", desc))
-        except Exception:
-            pass
-        raise TelegramAPIError(method, int(getattr(e, "code", 0) or 0), desc)
+            desc = body.strip() or str(e)
+            try:
+                parsed = json.loads(body)
+                desc = str(parsed.get("description", desc))
+            except Exception:
+                pass
+
+            code = int(getattr(e, "code", 0) or 0)
+            if code == 429 and attempt < max_attempts:
+                retry_after = _extract_retry_after_seconds(desc)
+                if retry_after is None:
+                    retry_after = float(attempt * 2)
+                wait_seconds = min(max(retry_after, 1.0), 60.0)
+                print(
+                    f"[WARN] Telegram HTTP 429 on {method}, retry {attempt}/{max_attempts} after {wait_seconds:.1f}s: {desc}",
+                    flush=True,
+                )
+                time.sleep(wait_seconds)
+                continue
+            raise TelegramAPIError(method, code, desc)
+
+    raise TelegramAPIError(method, 429, "Too Many Requests")
 
 
 def delete_webhook(bot_token: str, drop_pending_updates: bool = False) -> Tuple[bool, str]:
@@ -1599,14 +1837,10 @@ def download_telegram_file(bot_token: str, file_path: str, save_path: str) -> bo
     url = f"https://api.telegram.org/file/bot{bot_token}/{file_path}"
     req = urllib.request.Request(url, method="GET")
     try:
-        with urllib.request.urlopen(req, timeout=40) as resp:
-            data = resp.read()
+        data = _urlopen_bytes_with_ssl_fallback(req, timeout=40)
     except Exception as e:
-        if "CERTIFICATE_VERIFY_FAILED" not in str(e):
-            return False
-        insecure_ctx = ssl._create_unverified_context()
-        with urllib.request.urlopen(req, timeout=40, context=insecure_ctx) as resp:
-            data = resp.read()
+        print(f"[WARN] download_telegram_file lỗi: {e}", flush=True)
+        return False
 
     with open(save_path, "wb") as f:
         f.write(data)
@@ -1678,6 +1912,7 @@ def send_document(bot_token: str, chat_id: str, file_path: str, caption: str) ->
     if not os.path.exists(file_path):
         return False
     filename = os.path.basename(file_path) or "otp_wps.csv"
+    mime_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
 
     url = f"https://api.telegram.org/bot{bot_token}/sendDocument"
     boundary = "----otplistener" + "".join(random.choice(string.ascii_letters) for _ in range(16))
@@ -1700,7 +1935,7 @@ def send_document(bot_token: str, chat_id: str, file_path: str, caption: str) ->
     parts.append(
         f'Content-Disposition: form-data; name="document"; filename="{filename}"\r\n'.encode("utf-8")
     )
-    parts.append(b"Content-Type: text/csv\r\n\r\n")
+    parts.append(f"Content-Type: {mime_type}\r\n\r\n".encode("utf-8"))
     parts.append(file_data)
     parts.append(b"\r\n")
     parts.append(f"--{boundary}--\r\n".encode("utf-8"))
@@ -1721,6 +1956,7 @@ def get_updates(bot_token: str, offset: int, timeout_seconds: int) -> List[Dict]
     payload = {
         "timeout": str(timeout_seconds),
         "offset": str(offset),
+        "limit": "100",
         "allowed_updates": json.dumps(["message", "callback_query"]),
     }
     resp = telegram_api(bot_token, "getUpdates", payload)
@@ -1775,6 +2011,7 @@ def process_addotp(text: str, csv_path: str) -> Tuple[str, bool]:
 
     existing_keys = load_existing_keys(csv_path)
     existing_names = load_existing_account_names(csv_path)
+    existing_secrets = load_existing_secrets(csv_path)
     new_rows: List[Dict[str, str]] = []
     duplicates: List[Dict[str, str]] = []
     duplicate_names: List[Dict[str, str]] = []
@@ -1782,6 +2019,9 @@ def process_addotp(text: str, csv_path: str) -> Tuple[str, bool]:
     for rec in records:
         account_cell = build_account_cell(rec.get("account", ""), rec.get("issuer", "")).strip()
         account_key = account_cell.lower()
+        if rec.get("secret", "") in existing_secrets:
+            duplicates.append(rec)
+            continue
         if rec["key"] in existing_keys:
             duplicates.append(rec)
             continue
@@ -1791,6 +2031,8 @@ def process_addotp(text: str, csv_path: str) -> Tuple[str, bool]:
         else:
             new_rows.append(rec)
             existing_keys.add(rec["key"])
+            if rec.get("secret", ""):
+                existing_secrets.add(rec["secret"])
             if account_key:
                 existing_names.add(account_key)
 
@@ -2319,6 +2561,7 @@ def process_qr_photo(bot_token: str, msg: Dict, csv_path: str) -> Tuple[str, boo
         with _csv_rw_lock:
             existing_keys = load_existing_keys(csv_path)
             existing_names = load_existing_account_names(csv_path)
+            existing_secrets = load_existing_secrets(csv_path)
             new_rows: List[Dict[str, str]] = []
             duplicates: List[Dict[str, str]] = []
             duplicate_names: List[Dict[str, str]] = []
@@ -2327,7 +2570,9 @@ def process_qr_photo(bot_token: str, msg: Dict, csv_path: str) -> Tuple[str, boo
                 rec["index"] = str(idx)
                 account_cell = build_account_cell(rec.get("account", ""), rec.get("issuer", "")).strip()
                 account_key = account_cell.lower()
-                if rec["key"] in existing_keys:
+                if rec.get("secret", "") in existing_secrets:
+                    duplicates.append(rec)
+                elif rec["key"] in existing_keys:
                     duplicates.append(rec)
                 elif account_key in existing_names:
                     rec["account_cell"] = account_cell
@@ -2335,6 +2580,8 @@ def process_qr_photo(bot_token: str, msg: Dict, csv_path: str) -> Tuple[str, boo
                 else:
                     new_rows.append(rec)
                     existing_keys.add(rec["key"])
+                    if rec.get("secret", ""):
+                        existing_secrets.add(rec["secret"])
                     if account_key:
                         existing_names.add(account_key)
 
@@ -2471,8 +2718,10 @@ def parse_args():
     parser.add_argument("--sent-dedupe-file", default=os.environ.get("TELEGRAM_SENT_DEDUPE_FILE", "telegram_sent_dedupe.json"))
     parser.add_argument("--singleton-lock-file", default=os.environ.get("TELEGRAM_SINGLETON_LOCK_FILE", ""))
     parser.add_argument("--poll-timeout", type=int, default=30)
-    parser.add_argument("--sleep-seconds", type=float, default=1.0)
+    parser.add_argument("--sleep-seconds", type=float, default=float(os.environ.get("SLEEP_SECONDS", "1")))
     parser.add_argument("--sheet-pull-interval-seconds", type=float, default=float(os.environ.get("TELEGRAM_SHEET_PULL_INTERVAL_SECONDS", "120")))
+    parser.add_argument("--employee-restore-cooldown-seconds", type=float, default=float(os.environ.get("TELEGRAM_EMPLOYEE_RESTORE_COOLDOWN_SECONDS", "30")))
+    parser.add_argument("--employee-fast-mode", default=os.environ.get("TELEGRAM_EMPLOYEE_FAST_MODE", "1"))
     parser.add_argument("--google-sheet-id", default=os.environ.get("GOOGLE_SHEET_ID", ""))
     parser.add_argument("--google-sheet-name", default=os.environ.get("GOOGLE_SHEET_NAME", "OTP"))
     parser.add_argument("--google-service-account-file", default=os.environ.get("GOOGLE_SERVICE_ACCOUNT_FILE", ""))
@@ -2553,7 +2802,39 @@ def main() -> int:
     offset = load_offset(args.offset_file)
     conflict_409_count = 0
     last_sheet_pull_ts = 0.0
+    last_employee_restore_ts = 0.0
     sheet_pull_interval = max(float(args.sheet_pull_interval_seconds), 10.0)
+    employee_restore_cooldown = max(float(args.employee_restore_cooldown_seconds), 0.0)
+    employee_fast_mode = str(getattr(args, "employee_fast_mode", "1")).strip().lower() in {"1", "true", "yes", "on"}
+
+    def maybe_restore_for_employee(reason: str) -> Tuple[bool, str]:
+        nonlocal last_employee_restore_ts
+        if not args.google_sheet_id:
+            return True, "Google Sheet chưa cấu hình"
+
+        # Fast mode: respond from local cache immediately; background pull keeps it fresh.
+        if employee_fast_mode:
+            return True, f"Fast mode (skip restore trực tiếp, reason={reason})"
+
+        now_local = time.time()
+        elapsed = now_local - last_employee_restore_ts
+        if last_employee_restore_ts > 0 and elapsed < employee_restore_cooldown:
+            return True, f"Skip restore ({reason}), dùng local cache {elapsed:.1f}s"
+
+        restore_ok_local, restore_msg_local = force_restore_csv_from_google_sheet(
+            args.wps_file,
+            args.google_sheet_id,
+            args.google_sheet_name,
+            args.google_service_account_json,
+            args.google_service_account_file,
+        )
+        print(
+            f"☁️ Pre-getotp({reason}) restore: {'OK' if restore_ok_local else 'FAIL'} | {restore_msg_local}",
+            flush=True,
+        )
+        if restore_ok_local:
+            last_employee_restore_ts = now_local
+        return restore_ok_local, restore_msg_local
     print("🤖 Telegram listener đang chạy...")
     print(f"📄 File WPS: {args.wps_file}")
     print(f"📌 Chat admin: {args.chat_id}")
@@ -2657,14 +2938,7 @@ def main() -> int:
                         continue
 
                     if args.google_sheet_id:
-                        restore_ok, restore_msg = force_restore_csv_from_google_sheet(
-                            args.wps_file,
-                            args.google_sheet_id,
-                            args.google_sheet_name,
-                            args.google_service_account_json,
-                            args.google_service_account_file,
-                        )
-                        print(f"☁️ Pre-getotp(refresh) restore: {'OK' if restore_ok else 'FAIL'} | {restore_msg}", flush=True)
+                        restore_ok, restore_msg = maybe_restore_for_employee("refresh")
                         if not restore_ok:
                             answer_callback_query(args.bot_token, callback_id, "Lỗi đọc Google Sheet, thử lại sau")
                             continue
@@ -2715,14 +2989,7 @@ def main() -> int:
                     chosen_account = choices[pick_idx]
 
                     if args.google_sheet_id:
-                        restore_ok, restore_msg = force_restore_csv_from_google_sheet(
-                            args.wps_file,
-                            args.google_sheet_id,
-                            args.google_sheet_name,
-                            args.google_service_account_json,
-                            args.google_service_account_file,
-                        )
-                        print(f"☁️ Pre-getotp(pick) restore: {'OK' if restore_ok else 'FAIL'} | {restore_msg}", flush=True)
+                        restore_ok, restore_msg = maybe_restore_for_employee("pick")
                         if not restore_ok:
                             answer_callback_query(args.bot_token, callback_id, "Lỗi đọc Google Sheet, thử lại sau")
                             continue
@@ -3176,24 +3443,23 @@ def main() -> int:
                 continue
 
             if is_admin_chat and text.startswith("/qr"):
-                report_text, ok, qr_path = process_qr_command(text)
-                if ok and qr_path:
+                report_text, ok, qr_paths = process_qr_command(text)
+                if ok and qr_paths:
                     send_message(args.bot_token, message_chat_id, report_text)
-                    sent = send_photo(
-                        args.bot_token,
-                        message_chat_id,
-                        qr_path,
-                        f"QR migration chứa OTP ({datetime.now().strftime('%Y-%m-%d %H:%M:%S')})",
-                    )
-                    if not sent:
-                        send_message(args.bot_token, message_chat_id, "❌ Không gửi được ảnh QR")
+                    ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    for idx, qr_path in enumerate(qr_paths, 1):
+                        caption = f"QR OTP {idx}/{len(qr_paths)} ({ts})"
+                        sent = send_photo(args.bot_token, message_chat_id, qr_path, caption)
+                        if not sent:
+                            send_message(args.bot_token, message_chat_id, f"❌ Không gửi được ảnh QR #{idx}")
                 else:
                     send_message(args.bot_token, message_chat_id, report_text)
-                if qr_path and os.path.exists(qr_path):
-                    try:
-                        os.remove(qr_path)
-                    except Exception:
-                        pass
+                for qr_path in qr_paths:
+                    if os.path.exists(qr_path):
+                        try:
+                            os.remove(qr_path)
+                        except Exception:
+                            pass
                 continue
 
             if is_admin_chat and text.strip().lower() in {"bdls", "/bdls"}:
@@ -3206,14 +3472,7 @@ def main() -> int:
                     send_message(args.bot_token, message_chat_id, "❌ Bạn chưa được cấp quyền lấy OTP. Gửi /myid rồi nhờ admin cấp quyền.")
                     continue
                 if args.google_sheet_id:
-                    restore_ok, restore_msg = force_restore_csv_from_google_sheet(
-                        args.wps_file,
-                        args.google_sheet_id,
-                        args.google_sheet_name,
-                        args.google_service_account_json,
-                        args.google_service_account_file,
-                    )
-                    print(f"☁️ Pre-getotp(command) restore: {'OK' if restore_ok else 'FAIL'} | {restore_msg}", flush=True)
+                    restore_ok, restore_msg = maybe_restore_for_employee("command")
                     if not restore_ok:
                         send_message(args.bot_token, message_chat_id, f"❌ Lỗi đọc Google Sheet trước khi lấy OTP: {restore_msg}")
                         continue
@@ -3231,14 +3490,7 @@ def main() -> int:
                     send_message(args.bot_token, message_chat_id, "❌ Bạn chưa được cấp quyền lấy OTP. Gửi /myid rồi nhờ admin cấp quyền.")
                     continue
                 if args.google_sheet_id:
-                    restore_ok, restore_msg = force_restore_csv_from_google_sheet(
-                        args.wps_file,
-                        args.google_sheet_id,
-                        args.google_sheet_name,
-                        args.google_service_account_json,
-                        args.google_service_account_file,
-                    )
-                    print(f"☁️ Pre-getotp(text) restore: {'OK' if restore_ok else 'FAIL'} | {restore_msg}", flush=True)
+                    restore_ok, restore_msg = maybe_restore_for_employee("text")
                     if not restore_ok:
                         send_message(args.bot_token, message_chat_id, f"❌ Lỗi đọc Google Sheet trước khi lấy OTP: {restore_msg}")
                         continue

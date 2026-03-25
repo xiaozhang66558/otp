@@ -1,0 +1,64 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project specific - runtime/logs
+.runtime/
+listener.log
+telegram_offset.txt
+telegram_processed_*.json
+telegram_processed_*.json.lock
+*.log
+
+# Secrets and sensitive data
+.env.local
+.env
+.env.*.local
+.secrets/
+*.key
+*.pem
+*.json.key
+
+# Data files
+otp_wps.csv
+*.db
+*.db-journal
+
+# Chrome profiles (not needed in repo)
+profile_acc*/
+
+# Session files
+*.session
+*.session-journal
+
+# Telegram cache
+telegram_qr_pending.json
+telegram_permissions.json
