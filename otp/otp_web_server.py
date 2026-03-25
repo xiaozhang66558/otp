@@ -219,22 +219,25 @@ def _html_page() -> str:
   <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\" />
   <title>Nefitly OTP Web</title>
   <style>
-	body { font-family: ui-sans-serif, -apple-system, Segoe UI, sans-serif; background:#f3f7f5; margin:0; padding:24px; }
-	.card { max-width: 860px; margin: 0 auto; background:#fff; border:1px solid #d7e5df; border-radius:14px; overflow:hidden; }
-	.head { padding:18px; background:linear-gradient(135deg,#0f766e,#0d9488); color:#fff; }
-	.body { padding:16px; display:grid; gap:10px; }
-	.row { display:grid; grid-template-columns:1fr 1fr auto; gap:8px; }
-	input,button { border:1px solid #c6d9d1; border-radius:10px; padding:10px 12px; font-size:14px; }
-	button { background:#0f766e; color:#fff; border-color:transparent; cursor:pointer; }
+	body { font-family: ui-sans-serif, -apple-system, Segoe UI, sans-serif; background:#eef4f2; margin:0; padding:24px; }
+	.card { max-width: 980px; margin: 0 auto; background:#fff; border:1px solid #d7e5df; border-radius:18px; overflow:hidden; box-shadow:0 18px 48px rgba(16,24,40,.08); }
+	.head { padding:22px; background:linear-gradient(135deg,#0f766e,#0d9488); color:#fff; }
+	.head h2 { margin:0; font-size:42px; letter-spacing:.2px; }
+	.body { padding:20px; display:grid; gap:12px; }
+	.row { display:grid; grid-template-columns:1fr 1fr auto; gap:10px; }
+	input,button { border:1px solid #c6d9d1; border-radius:14px; padding:12px 14px; font-size:20px; }
+	input { background:#f8fbfa; }
+	button { background:#0f766e; color:#fff; border-color:transparent; cursor:pointer; font-weight:600; }
+	button:hover { filter:brightness(1.03); transform:translateY(-1px); }
 	.ghost { background:#fff; color:#1d2a24; border-color:#c6d9d1; }
 	.hide { display:none; }
-	.hint { color:#51645c; font-size:13px; }
-	pre { background:#fbfdfc; border:1px solid #dce9e3; border-radius:10px; padding:12px; min-height:180px; white-space:pre-wrap; }
-	@media (max-width:760px){ .row { grid-template-columns:1fr; } }
+	.hint { color:#51645c; font-size:36px; }
+	pre { background:#fbfdfc; border:1px solid #dce9e3; border-radius:14px; padding:16px; min-height:340px; white-space:pre-wrap; font-size:38px; line-height:1.35; }
+	@media (max-width:760px){ .row { grid-template-columns:1fr; } .head h2 { font-size:34px; } .hint { font-size:28px; } pre { font-size:30px; } }
   </style>
 </head><body>
   <main class=\"card\">
-	<section class=\"head\"><h2 style=\"margin:0\">OTP Web Lookup</h2></section>
+	<section class=\"head\"><h2>OTP Web Lookup</h2></section>
 	<section class=\"body\">
 	  <div id=\"loginBox\" class=\"row\">
 		<input id=\"username\" placeholder=\"Username\" />
@@ -270,79 +273,121 @@ def _html_page() -> str:
 		  appBox.classList.remove('hide');
 		  status.textContent = (d.username ? ('Xin chao ' + d.username + '. ') : '') + (d.sessionText || 'Da dang nhap');
 		} else {
+		  loginBox.classList.remove('hide');
+		  appBox.classList.add('hide');
+		  status.textContent = d.error || 'Chua dang nhap.';
+		}
+	  } catch (e) {
+		status.textContent = 'Loi ket noi server';
+	  }
+	}
 
-			return """<!DOCTYPE html>
-		<html lang="vi"><head>
-		  <meta charset="utf-8"/>
-		  <meta name="viewport" content="width=device-width,initial-scale=1"/>
-		  <title>Nefitly • OTP Lookup</title>
-		  <style>
-		    * { margin:0; padding:0; box-sizing:border-box; }
-		    body { font-family:-apple-system,'Segoe UI','Helvetica Neue',sans-serif; background:linear-gradient(135deg,#667eea 0%,#764ba2 100%); min-height:100vh; display:flex; align-items:center; justify-content:center; padding:16px; }
-		    .container { width:100%; max-width:480px; }
-		    .card { background:#fff; border-radius:20px; box-shadow:0 20px 60px rgba(0,0,0,0.3); overflow:hidden; animation:slideIn 0.4s ease-out; }
-		    @keyframes slideIn { from { opacity:0; transform:translateY(20px); } to { opacity:1; transform:translateY(0); } }
-		    .header { background:linear-gradient(135deg,#667eea,#764ba2); padding:40px 24px; text-align:center; color:#fff; }
-		    .header h1 { font-size:28px; font-weight:600; letter-spacing:-0.5px; }
-		    .header .subtitle { font-size:13px; opacity:0.9; margin-top:6px; }
-		    .body { padding:32px 24px; }
-		    .form-group { margin-bottom:16px; }
-		    input { width:100%; padding:12px 16px; border:1.5px solid #e0e0e0; border-radius:12px; font-size:15px; transition:all 0.3s; background:#f9f9f9; }
-		    input:focus { outline:none; border-color:#667eea; background:#fff; box-shadow:0 0 0 3px rgba(102,126,234,0.1); }
-		    .row { display:grid; grid-template-columns:1fr auto auto; gap:8px; margin-bottom:16px; }
-		    button { padding:12px 24px; border:none; border-radius:12px; font-size:14px; font-weight:500; cursor:pointer; transition:all 0.3s; }
-		    .btn-primary { background:linear-gradient(135deg,#667eea,#764ba2); color:#fff; width:100%; }
-		    .btn-primary:hover { transform:translateY(-2px); box-shadow:0 10px 20px rgba(102,126,234,0.3); }
-		    .btn-primary:active { transform:translateY(0); }
-		    .btn-secondary { background:#f0f0f0; color:#333; }
-		    .btn-secondary:hover { background:#e0e0e0; }
-		    .status { font-size:13px; color:#666; margin:16px 0; padding:12px 16px; background:#f5f5f5; border-radius:8px; border-left:3px solid #667eea; }
-		    .output { font-family:'Courier New',monospace; font-size:13px; line-height:1.6; color:#222; background:#f9f9f9; border:1px solid #e0e0e0; border-radius:12px; padding:16px; min-height:200px; white-space:pre-wrap; word-break:break-word; max-height:400px; overflow-y:auto; }
-		    .hide { display:none; }
-		    .loading { animation:pulse 1.5s infinite; }
-		    @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.6; } }
-		    .success { color:#10b981; }
-		    .error { color:#ef4444; }
-		    @media (max-width:480px) { .header { padding:32px 20px; } .body { padding:24px 20px; } .row { grid-template-columns:1fr; } }
-		  </style>
-		</head><body>
-		  <div class="container">
-		    <div class="card">
-		      <div class="header">
-		        <h1>🔐 Nefitly OTP</h1>
-		        <p class="subtitle">Tra cứu mã xác thực nhanh chóng</p>
-		      </div>
-		      <div class="body">
-		        <div id="loginBox">
-		          <div class="form-group">
-		            <input id="username" placeholder="👤 Tên đăng nhập" autocomplete="username"/>
-		          </div>
-		          <div class="form-group">
-		            <input id="password" type="password" placeholder="🔑 Mật khẩu" autocomplete="current-password"/>
-		          </div>
-		          <button id="btnLogin" class="btn-primary">Đăng nhập</button>
-		        </div>
-		        <div id="appBox" class="hide">
-		          <div class="row">
-		            <input id="query" placeholder="🔍 Nhập từ khóa OTP..."/>
-		            <button id="btnLookup" class="btn-primary">Lấy</button>
-		            <button id="btnLogout" class="btn-secondary">Thoát</button>
-		          </div>
-		        </div>
-		        <div id="status" class="status">⏳ Kiểm tra phiên...</div>
-		        <div id="out" class="output">Sẵn sàng.</div>
-		      </div>
-		    </div>
-		  </div>
-		  <script>
-		    const loginBox=document.getElementById('loginBox'),appBox=document.getElementById('appBox'),status=document.getElementById('status'),out=document.getElementById('out');
-		    async function checkSession(){try{const res=await fetch('/api/session',{credentials:'same-origin'}),d=await res.json();if(d.ok&&d.authenticated){loginBox.classList.add('hide'),appBox.classList.remove('hide'),status.classList.remove('error'),status.innerHTML='✅ '+(d.username?'Xin chào '+d.username:'Đã đăng nhập')+' <br/><small>Phiên: '+d.sessionText+'</small>'}else{loginBox.classList.remove('hide'),appBox.classList.add('hide'),status.classList.add('error'),status.textContent='❌ '+d.error||'Chưa đăng nhập'}}catch(e){status.classList.add('error'),status.textContent='❌ Lỗi kết nối'}}
-		    async function login(){const u=document.getElementById('username').value.trim(),p=document.getElementById('password').value.trim();out.classList.add('loading'),out.textContent='⏳ Đang đăng nhập...';const res=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',body:JSON.stringify({username:u,password:p})}),d=await res.json();if(out.classList.remove('loading'),d.ok){out.classList.add('success'),out.textContent='✅ Đăng nhập thành công!'}else out.classList.add('error'),out.textContent='❌ '+(d.error||'Đăng nhập thất bại');await checkSession()}
-		    async function logout(){out.textContent='⏳ Đang đăng xuất...';await fetch('/api/logout',{method:'POST',credentials:'same-origin'}),out.textContent='✅ Đã đăng xuất.',await checkSession()}
-		    async function lookup(){const q=document.getElementById('query').value.trim();if(!q){out.textContent='⚠️ Nhập từ khóa trước',out.classList.add('error');return}out.classList.remove('success','error'),out.textContent='⏳ Tìm kiếm...';const res=await fetch('/api/getotp',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',body:JSON.stringify({query:q})}),d=await res.json();res.status===401?(out.classList.add('error'),out.textContent='❌ Hết phiên. Vui lòng đăng nhập lại'):d.ok?(out.classList.add('success'),out.textContent='✅ '+d.text):(out.classList.add('error'),out.textContent='❌ '+(d.text||d.error||'Không tìm thấy')),d.sessionText&&(status.textContent='✅ '+d.sessionText)}
-		    document.getElementById('btnLogin').addEventListener('click',login),document.getElementById('btnLookup').addEventListener('click',lookup),document.getElementById('btnLogout').addEventListener('click',logout),document.getElementById('query').addEventListener('keydown',(e)=>{e.key==='Enter'&&lookup()}),document.getElementById('password').addEventListener('keydown',(e)=>{e.key==='Enter'&&login()}),checkSession();
-		  </script>
-		</body></html>"""
+	async function login() {
+	  const username = document.getElementById('username').value.trim();
+	  const password = document.getElementById('password').value.trim();
+	  out.textContent = 'Dang dang nhap...';
+	  const res = await fetch('/api/login', {
+		method:'POST',
+		headers:{'Content-Type':'application/json'},
+		credentials:'same-origin',
+		body: JSON.stringify({username, password})
+	  });
+	  const d = await res.json();
+	  out.textContent = d.ok ? 'Dang nhap thanh cong.' : (d.error || 'Dang nhap that bai');
+	  await checkSession();
+	}
+
+	async function logout() {
+	  await fetch('/api/logout', {method:'POST', credentials:'same-origin'});
+	  out.textContent = 'Da dang xuat.';
+	  await checkSession();
+	}
+
+	async function lookup() {
+	  const query = document.getElementById('query').value.trim();
+	  if (!query) {
+		out.textContent = 'Nhap query truoc.';
+		return;
+	  }
+	  out.textContent = 'Dang xu ly...';
+	  const res = await fetch('/api/getotp', {
+		method:'POST',
+		headers:{'Content-Type':'application/json'},
+		credentials:'same-origin',
+		body: JSON.stringify({query})
+	  });
+	  const d = await res.json();
+	  out.textContent = d.text || d.error || '(trong)';
+	  if (d.sessionText) status.textContent = d.sessionText;
+	  if (res.status === 401) await checkSession();
+	}
+
+	document.getElementById('btnLogin').addEventListener('click', login);
+	document.getElementById('btnLookup').addEventListener('click', lookup);
+	document.getElementById('btnLogout').addEventListener('click', logout);
+	document.getElementById('query').addEventListener('keydown', (e)=>{ if (e.key==='Enter') lookup(); });
+	document.getElementById('password').addEventListener('keydown', (e)=>{ if (e.key==='Enter') login(); });
+	checkSession();
+  </script>
+</body></html>"""
+
+
+class OTPWebHandler(BaseHTTPRequestHandler):
+	server_version = "OTPWeb/3.0"
+
+	def _client_ip(self) -> str:
+		if WEB_TRUST_PROXY:
+			xff = self.headers.get("X-Forwarded-For", "")
+			if xff:
+				return xff.split(",", 1)[0].strip()
+		return self.client_address[0] if self.client_address else ""
+
+	def _cookie_value(self, key: str) -> str:
+		raw = self.headers.get("Cookie", "")
+		for part in raw.split(";"):
+			item = part.strip()
+			if "=" not in item:
+				continue
+			k, v = item.split("=", 1)
+			if k.strip() == key:
+				return v.strip()
+		return ""
+
+	def _set_cookie(self, key: str, value: str, max_age: int) -> None:
+		self.send_header("Set-Cookie", f"{key}={value}; Max-Age={max_age}; Path=/; HttpOnly; SameSite=Lax")
+
+	def _clear_cookie(self, key: str) -> None:
+		self.send_header("Set-Cookie", f"{key}=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax")
+
+	def _session_text(self, session: Dict[str, Any]) -> str:
+		now = _now_ts()
+		remain = max(int(session.get("expires_at", now)) - now, 0)
+		user = str(session.get("username", ""))
+		if user:
+			return f"Tai khoan: {user} | phien con {remain}s"
+		return f"Phien con {remain}s"
+
+	def _is_ip_allowed(self, client_ip: str) -> bool:
+		if not WEB_ALLOWED_IPS:
+			return True
+		return client_ip in WEB_ALLOWED_IPS
+
+	def _read_json_body(self) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+		n = int(self.headers.get("Content-Length", "0") or "0")
+		raw = self.rfile.read(n) if n > 0 else b"{}"
+		try:
+			return json.loads(raw.decode("utf-8")), None
+		except Exception:
+			return None, "invalid json"
+
+	def _send_json(self, code: int, payload: Dict[str, Any]) -> None:
+		data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+		self.send_response(code)
+		self.send_header("Content-Type", "application/json; charset=utf-8")
+		self.send_header("Content-Length", str(len(data)))
+		self.end_headers()
+		self.wfile.write(data)
+
 	def _send_html(self, html: str) -> None:
 		data = html.encode("utf-8")
 		self.send_response(200)
