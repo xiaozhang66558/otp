@@ -615,12 +615,13 @@ def _html_page(authenticated: bool = False, session_text: str = "Dang kiem tra p
 		return;
 	  }
 
+	if (!window.selectedAccount) window.selectedAccount = null;
 	otpList.innerHTML = visible.map(name => {
 		const d = otpData[name] || {};
 		const code = fmtCode(d.code);
 		const rem = d.remaining !== undefined ? d.remaining : 30;
 		const per = d.period || 30;
-		const isActive = name === selectedAccount;
+		const isActive = name === window.selectedAccount;
 		return '<div class="otp-row' + (isActive ? ' active' : '') + '" data-name="' + name.replace(/"/g,'&quot;') + '">' 
 			+ '<div><div class="otp-name">' + name + '</div>'
 			+ (isActive ? ('<div class="otp-code-big">' + code + '</div>') : '')
@@ -635,11 +636,10 @@ def _html_page(authenticated: bool = False, session_text: str = "Dang kiem tra p
 	}
 
 
-	let selectedAccount = null;
 	async function selectAccount(row) {
 		const name = row.getAttribute('data-name') || '';
 		if (!name) return;
-		selectedAccount = name;
+		window.selectedAccount = name;
 		renderList();
 		// Gửi Telegram khi nhấp vào
 		const d = otpData[name] || {};
