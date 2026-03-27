@@ -11,6 +11,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, Optional, Set, Tuple
 from urllib.parse import parse_qs, urlparse
+from zoneinfo import ZoneInfo
 
 from telegram_otp_listener import force_restore_csv_from_google_sheet, generate_totp_code, load_csv_rows, process_getotp_query
 
@@ -85,6 +86,7 @@ WEB_ALLOWED_IPS = _parse_csv_set(os.environ.get("OTP_WEB_ALLOWED_IPS", "").strip
 WEB_SESSION_TTL_SECONDS = max(int(os.environ.get("OTP_WEB_SESSION_TTL_SECONDS", "1800") or "1800"), 60)
 WEB_ALLOWED_TIME_WINDOW = _parse_allowed_window(os.environ.get("OTP_WEB_ALLOWED_TIME_WINDOW", "").strip())
 WEB_SHEET_REFRESH_SECONDS = max(int(os.environ.get("OTP_WEB_SHEET_REFRESH_SECONDS", "15") or "15"), 5)
+WEB_TIMEZONE = os.environ.get("OTP_WEB_TIMEZONE", "Asia/Ho_Chi_Minh").strip() or "Asia/Ho_Chi_Minh"
 
 GOOGLE_SHEET_ID = os.environ.get("GOOGLE_SHEET_ID", "").strip()
 GOOGLE_SHEET_NAME = (
@@ -199,7 +201,10 @@ def _delete_session(signed: str) -> None:
 def _is_time_window_allowed() -> bool:
 	if WEB_ALLOWED_TIME_WINDOW is None:
 		return True
-	now = datetime.now()
+	try:
+		now = datetime.now(ZoneInfo(WEB_TIMEZONE))
+	except Exception:
+		now = datetime.now()
 	now_m = now.hour * 60 + now.minute
 	start, end = WEB_ALLOWED_TIME_WINDOW
 	if start <= end:
@@ -1412,6 +1417,7 @@ def main() -> int:
 		print(f"Allowed IPs: {','.join(sorted(WEB_ALLOWED_IPS))}")
 	if WEB_ALLOWED_TIME_WINDOW:
 		print(f"Allowed time window: {os.environ.get('OTP_WEB_ALLOWED_TIME_WINDOW', '')}")
+	print(f"Time zone for window: {WEB_TIMEZONE}")
 	server.serve_forever()
 	return 0
 
