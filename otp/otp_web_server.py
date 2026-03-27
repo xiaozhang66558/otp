@@ -615,36 +615,49 @@ def _html_page(authenticated: bool = False, session_text: str = "Dang kiem tra p
 		return;
 	  }
 
-	  otpList.innerHTML = visible.map(name => {
+	otpList.innerHTML = visible.map(name => {
 		const d = otpData[name] || {};
 		const code = fmtCode(d.code);
 		const rem = d.remaining !== undefined ? d.remaining : 30;
 		const per = d.period || 30;
-		return '<div class="otp-row" data-name="' + name.replace(/"/g,'&quot;') + '">'
-		  + '<div><div class="otp-name">' + name + '</div>'
-		  + '<div class="otp-code-big">' + code + '</div></div>'
-		  + '<div class="otp-right">'
-		  + '<div class="otp-timer">' + timerSvg(rem, per) + '</div>'
-		  + copyIcon()
-		  + '</div>'
-		  + '</div>';
-	  }).join('');
+		const isActive = name === selectedAccount;
+		return '<div class="otp-row' + (isActive ? ' active' : '') + '" data-name="' + name.replace(/"/g,'&quot;') + '">' 
+			+ '<div><div class="otp-name">' + name + '</div>'
+			+ (isActive ? ('<div class="otp-code-big">' + code + '</div>') : '')
+			+ '</div>'
+			+ (isActive ? ('<div class="otp-right">' + '<div class="otp-timer">' + timerSvg(rem, per) + '</div>' + copyIcon() + '</div>') : '')
+			+ '</div>';
+	}).join('');
 
-	  otpList.querySelectorAll('.otp-row').forEach(row => {
-		row.addEventListener('click', () => copyOtp(row));
-	  });
+	otpList.querySelectorAll('.otp-row').forEach(row => {
+		row.addEventListener('click', () => selectAccount(row));
+	});
 	}
 
-	async function copyOtp(row) {
-	  const name = row.getAttribute('data-name') || '';
-	  const d = otpData[name] || {};
-	  const code = String(d.code || '').replace(/\\s/g, '');
-	  if (!code) return;
-	  try {
-		await navigator.clipboard.writeText(code);
-	  } catch(e) {}
-	  row.classList.add('copied');
-	  setTimeout(() => row.classList.remove('copied'), 1500);
+
+	let selectedAccount = null;
+	async function selectAccount(row) {
+		const name = row.getAttribute('data-name') || '';
+		if (!name) return;
+		selectedAccount = name;
+		renderList();
+		// Gửi Telegram khi nhấp vào
+		const d = otpData[name] || {};
+		const code = String(d.code || '').replace(/\s/g, '');
+		if (code) {
+			try {
+				await navigator.clipboard.writeText(code);
+			} catch(e) {}
+			row.classList.add('copied');
+			setTimeout(() => row.classList.remove('copied'), 1500);
+			// Gọi API gửi Telegram
+			fetch('/api/notify-telegram', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				credentials: 'same-origin',
+				body: JSON.stringify({ account: name, code: code })
+			});
+		}
 	}
 
 	// ---- Data loading ----
@@ -765,7 +778,35 @@ def _html_page(authenticated: bool = False, session_text: str = "Dang kiem tra p
 
 
 class OTPWebHandler(BaseHTTPRequestHandler):
-	server_version = "OTPWeb/3.0"
+
+	def do_POST(self) -> None:
+		parsed = urlparse(self.path)
+		ip = self._client_ip()
+		if parsed.path == "/api/notify-telegram":
+			session = self._current_session()
+			if not session:
+				self._send_json(401, {"ok": False, "error": "unauthorized"})
+				return
+			n = int(self.headers.get("Content-Length", "0") or "0")
+			raw = self.rfile.read(n) if n > 0 else b"{}"
+			try:
+				data = json.loads(raw.decode("utf-8"))
+			except Exception:
+				self._send_json(400, {"ok": False, "error": "invalid json"})
+				return
+			account = str(data.get("account", "")).strip()
+			code = str(data.get("code", "")).strip()
+			user = session.get("username", "")
+			now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+			msg = f"[OTP WEB]\nNguoi dung: {user}\nTai khoan: {account}\nMa OTP: {code}\nThoi gian: {now}"
+			try:
+				telegram_send(msg)
+			except Exception as e:
+				self._send_json(500, {"ok": False, "error": str(e)})
+				return
+			self._send_json(200, {"ok": True})
+			return
+		# ...existing code...
 
 	def _client_ip(self) -> str:
 		if WEB_TRUST_PROXY:
