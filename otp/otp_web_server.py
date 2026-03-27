@@ -2,6 +2,7 @@
 
 import hashlib
 import hmac
+import html
 import json
 import os
 import secrets
@@ -300,436 +301,391 @@ def _find_secret_by_account(account_name: str, csv_path: str) -> Tuple[Optional[
 	return None, "account not found"
 
 
-def _html_page() -> str:
-	return """<!doctype html>
+def _html_page(authenticated: bool = False, session_text: str = "Dang kiem tra phien...", login_error: bool = False) -> str:
+	login_class = "login-grid hide" if authenticated else "login-grid"
+	app_class = "toolbar" if authenticated else "toolbar hide"
+	status_text = session_text if authenticated else ("Dang nhap that bai. Kiem tra lai tai khoan/mat khau." if login_error else "Dang kiem tra phien...")
+	output_text = "Dang nhap thanh cong." if authenticated else ("Dang nhap that bai: invalid credentials" if login_error else "San sang.")
+	html_text = """<!doctype html>
 <html lang=\"vi\"><head>
   <meta charset=\"utf-8\" />
   <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\" />
   <title>Nefitly OTP</title>
   <style>
 	:root {
-	  --bg-1:#07122b;
-	  --bg-2:#0f2047;
-	  --bg-3:#15356e;
-	  --panel:#0c1b3ac9;
-	  --panel-strong:#10244f;
-	  --line:rgba(148, 163, 184, .18);
-	  --text:#eef4ff;
-	  --muted:#aac0e8;
-	  --soft:#d9ecff;
-	  --accent:#35d0ff;
-	  --accent-2:#4fffb0;
-	  --shadow:0 32px 80px rgba(2, 7, 23, .52);
+	  --bg:#f3f5f9;
+	  --panel:#ffffff;
+	  --line:#e5e9f2;
+	  --text:#162033;
+	  --muted:#6f7d95;
+	  --accent:#2563eb;
+	  --accent-soft:#e8f0ff;
+	  --success:#16a34a;
+	  --shadow:0 18px 46px rgba(16, 24, 40, .08);
 	}
 	* { box-sizing: border-box; }
 	body {
 	  margin: 0;
 	  min-height: 100vh;
 	  color: var(--text);
-	  font-family: 'Segoe UI', 'SF Pro Display', -apple-system, sans-serif;
-	  background:
-	    radial-gradient(900px 480px at 0% 0%, rgba(53,208,255,.22), transparent 60%),
-	    radial-gradient(760px 540px at 100% 100%, rgba(79,255,176,.12), transparent 55%),
-	    linear-gradient(145deg, var(--bg-1), var(--bg-2) 45%, var(--bg-3));
-	  padding: 28px;
+	  font-family: 'Segoe UI', 'SF Pro Text', -apple-system, sans-serif;
+	  background: linear-gradient(180deg, #f8fafc, #eef2f8 36%, #edf1f7);
 	}
 	.shell {
-	  max-width: 1160px;
+	  max-width: 920px;
 	  margin: 0 auto;
+	  padding: 20px 16px 28px;
 	}
-	.hero {
-	  display: grid;
-	  grid-template-columns: 1.4fr .9fr;
-	  gap: 18px;
+	.appbar {
+	  display: flex;
+	  align-items: center;
+	  justify-content: space-between;
+	  gap: 12px;
 	  margin-bottom: 18px;
 	}
-	.hero-card,
-	.side-card,
-	.main-card {
-	  background: linear-gradient(180deg, rgba(14,28,60,.92), rgba(11,24,54,.88));
-	  border: 1px solid var(--line);
-	  border-radius: 24px;
-	  box-shadow: var(--shadow);
-	  backdrop-filter: blur(10px);
+	.brand {
+	  font-size: 30px;
+	  font-weight: 800;
+	  letter-spacing: -.03em;
 	}
-	.hero-card {
-	  padding: 28px;
-	  min-height: 220px;
-	  position: relative;
-	  overflow: hidden;
+	.brand small {
+	  display: block;
+	  margin-top: 4px;
+	  font-size: 13px;
+	  font-weight: 600;
+	  color: var(--muted);
+	  letter-spacing: 0;
 	}
-	.hero-card:before {
-	  content: '';
-	  position: absolute;
-	  width: 320px;
-	  height: 320px;
-	  border-radius: 50%;
-	  background: radial-gradient(circle, rgba(53,208,255,.18), transparent 60%);
-	  top: -120px;
-	  right: -80px;
-	}
-	.badge {
+	.app-chip {
 	  display: inline-flex;
 	  align-items: center;
 	  gap: 8px;
-	  padding: 8px 14px;
-	  border: 1px solid rgba(79,255,176,.28);
+	  padding: 10px 14px;
 	  border-radius: 999px;
-	  color: #d7ffef;
-	  background: rgba(79,255,176,.08);
+	  background: #fff;
+	  border: 1px solid var(--line);
+	  color: var(--muted);
+	  box-shadow: var(--shadow);
 	  font-size: 13px;
-	  letter-spacing: .08em;
-	  text-transform: uppercase;
 	}
-	.hero-title {
-	  margin: 18px 0 10px;
-	  font-size: 54px;
-	  line-height: 1;
-	  letter-spacing: -.04em;
+	.live-dot {
+	  width: 8px;
+	  height: 8px;
+	  border-radius: 50%;
+	  background: var(--success);
 	}
-	.hero-text {
-	  max-width: 680px;
-	  color: var(--muted);
-	  font-size: 18px;
-	  line-height: 1.6;
+	.panel {
+	  background: var(--panel);
+	  border: 1px solid var(--line);
+	  border-radius: 28px;
+	  box-shadow: var(--shadow);
 	}
-	.kpi-grid {
-	  display: grid;
-	  gap: 14px;
+	.main-card {
 	  padding: 18px;
 	}
-	.kpi {
-	  background: rgba(9, 20, 47, .84);
-	  border: 1px solid var(--line);
-	  border-radius: 20px;
-	  padding: 18px;
-	}
-	.kpi-label {
-	  color: var(--muted);
-	  font-size: 12px;
-	  text-transform: uppercase;
-	  letter-spacing: .08em;
-	}
-	.kpi-value {
-	  margin-top: 10px;
-	  font-size: 22px;
-	  font-weight: 700;
-	}
-	.main-card { padding: 24px; }
-	.login-grid { display: grid; grid-template-columns: 1fr 1fr auto; gap: 12px; }
-	.toolbar { display: grid; gap: 14px; }
-	.workspace {
+	.login-grid {
 	  display: grid;
-	  grid-template-columns: 1.5fr .8fr;
-	  gap: 14px;
+	  grid-template-columns: 1fr 1fr auto;
+	  gap: 12px;
 	}
-	.result-col,
-	.live-col {
-	  border: 1px solid var(--line);
-	  border-radius: 18px;
-	  background: rgba(9, 20, 47, .55);
-	  padding: 14px;
+	.toolbar {
+	  display: grid;
+	  gap: 12px;
+	}
+	.query-row {
+	  display: grid;
+	  grid-template-columns: 1fr auto auto;
+	  gap: 10px;
+	  align-items: start;
 	}
 	.search-wrap { position: relative; }
-	.query-row { display: grid; grid-template-columns: 1fr auto auto; gap: 12px; align-items: start; }
 	.input-shell {
-	  position: relative;
-	  border-radius: 18px;
-	  background: linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.02));
-	  border: 1px solid rgba(148,163,184,.22);
-	  padding: 6px;
+	  border-radius: 20px;
+	  background: var(--accent-soft);
+	  border: 1px solid #d9e4fb;
+	  padding: 0;
 	}
 	.input-shell:focus-within {
-	  border-color: rgba(53,208,255,.55);
-	  box-shadow: 0 0 0 4px rgba(53,208,255,.12);
+	  border-color: #8eb2ff;
+	  box-shadow: 0 0 0 4px rgba(37, 99, 235, .08);
 	}
 	input {
 	  width: 100%;
 	  border: 0;
 	  outline: 0;
-	  border-radius: 14px;
-	  padding: 18px 18px;
-	  background: var(--soft);
-	  color: #0f172a;
-	  font-size: 26px;
+	  background: transparent;
+	  color: var(--text);
+	  font-size: 24px;
+	  font-weight: 700;
+	  padding: 18px 20px;
+	  border-radius: 20px;
+	}
+	input::placeholder {
+	  color: #8a97ac;
 	  font-weight: 600;
 	}
-	input::placeholder { color: #64748b; font-weight: 500; }
 	button {
 	  border: 0;
 	  border-radius: 18px;
 	  cursor: pointer;
-	  padding: 18px 22px;
-	  font-size: 20px;
+	  padding: 16px 18px;
+	  font-size: 17px;
 	  font-weight: 800;
-	  letter-spacing: -.02em;
-	  transition: transform .12s ease, filter .12s ease, box-shadow .12s ease;
 	}
-	button:hover { transform: translateY(-1px); filter: brightness(1.03); }
-	button:active { transform: translateY(0); }
 	.primary {
-	  color: #082032;
-	  background: linear-gradient(135deg, var(--accent), var(--accent-2));
-	  box-shadow: 0 18px 30px rgba(53,208,255,.18);
+	  color: #fff;
+	  background: linear-gradient(180deg, #3b82f6, #2563eb);
 	}
 	.ghost {
-	  color: #dce9ff;
-	  background: rgba(255,255,255,.08);
-	  border: 1px solid rgba(148,163,184,.16);
+	  color: var(--text);
+	  background: #f7f9fc;
+	  border: 1px solid var(--line);
 	}
 	.hide { display: none; }
 	.status-bar {
 	  display: flex;
 	  align-items: center;
 	  justify-content: space-between;
-	  gap: 12px;
-	  flex-wrap: wrap;
-	  padding: 14px 16px;
+	  gap: 10px;
+	  margin: 14px 0;
+	  padding: 12px 14px;
+	  border-radius: 18px;
+	  background: #f8fafc;
 	  border: 1px solid var(--line);
-	  border-radius: 18px;
-	  background: rgba(13,27,58,.72);
 	}
-	.status-main { font-size: 18px; color: #dbeafe; }
-	.status-tag {
-	  padding: 8px 12px;
-	  border-radius: 999px;
-	  background: rgba(53,208,255,.14);
-	  border: 1px solid rgba(53,208,255,.26);
-	  color: #c9f7ff;
-	  font-size: 13px;
+	.status-main {
+	  font-size: 14px;
+	  color: var(--muted);
 	}
-	.suggest-menu {
-	  position: absolute;
-	  top: calc(100% + 10px);
-	  left: 0;
-	  right: 0;
+	.workspace {
 	  display: grid;
-	  gap: 8px;
-	  padding: 10px;
-	  border-radius: 18px;
-	  background: rgba(10, 20, 45, .96);
-	  border: 1px solid rgba(148,163,184,.18);
-	  box-shadow: 0 22px 44px rgba(2, 7, 23, .45);
-	  z-index: 25;
+	  grid-template-columns: minmax(0, 1fr) 280px;
+	  gap: 16px;
+	  align-items: start;
 	}
-	.suggest-item {
-	  display: grid;
-	  grid-template-columns: 1fr auto;
-	  gap: 4px 12px;
-	  text-align: left;
-	  border-radius: 14px;
-	  padding: 14px 16px;
-	  background: rgba(255,255,255,.04);
-	  color: #f8fbff;
-	  border: 1px solid transparent;
+	.result-col,
+	.live-col {
+	  border: 1px solid var(--line);
+	  border-radius: 24px;
+	  background: #fff;
 	}
-	.suggest-item:hover,
-	.suggest-item.active {
-	  background: linear-gradient(135deg, rgba(53,208,255,.18), rgba(79,255,176,.14));
-	  border-color: rgba(79,255,176,.22);
-	}
-	.suggest-title { font-size: 18px; font-weight: 700; }
-	.suggest-meta { font-size: 12px; color: #bcd1f2; text-transform: uppercase; letter-spacing: .08em; }
-	.suggest-main { display: grid; gap: 4px; }
-	.suggest-live {
-	  align-self: center;
-	  justify-self: end;
-	  min-width: 104px;
-	  text-align: right;
-	}
-	.suggest-otp {
-	  font-size: 24px;
-	  letter-spacing: .08em;
-	  font-weight: 800;
-	  color: #f1f8ff;
-	}
-	.suggest-sec {
-	  margin-top: 2px;
-	  font-size: 12px;
-	  color: #a9c4ee;
-	}
+	.result-col { overflow: hidden; }
 	.panel-head {
 	  display: flex;
 	  align-items: center;
 	  justify-content: space-between;
-	  gap: 12px;
-	  margin-bottom: 12px;
+	  padding: 14px 16px 0;
 	}
-	.panel-title { font-size: 16px; color: #dce8ff; text-transform: uppercase; letter-spacing: .1em; }
-	.live-dot {
-	  width: 10px;
-	  height: 10px;
-	  border-radius: 50%;
-	  background: #4fffb0;
-	  box-shadow: 0 0 0 8px rgba(79,255,176,.12);
+	.panel-title {
+	  font-size: 13px;
+	  color: var(--muted);
+	  text-transform: uppercase;
+	  letter-spacing: .08em;
 	}
 	pre {
 	  margin: 0;
-	  min-height: 320px;
-	  border-radius: 20px;
-	  border: 1px solid var(--line);
-	  background: linear-gradient(180deg, rgba(8,18,44,.9), rgba(8,18,44,.82));
-	  color: #f4f8ff;
-	  padding: 22px;
+	  min-height: 180px;
+	  padding: 18px 16px 22px;
 	  white-space: pre-wrap;
-	  font-size: 30px;
-	  line-height: 1.42;
-	  box-shadow: inset 0 1px 0 rgba(255,255,255,.03);
+	  font-size: 18px;
+	  line-height: 1.5;
+	  color: var(--text);
+	  background: #fff;
+	}
+	.live-col {
+	  padding: 16px;
+	  position: sticky;
+	  top: 16px;
 	}
 	.live-title {
-	  font-size: 14px;
-	  letter-spacing: .1em;
+	  font-size: 13px;
+	  color: var(--muted);
 	  text-transform: uppercase;
-	  color: #cfe2ff;
+	  letter-spacing: .08em;
 	}
 	.live-account {
 	  margin-top: 8px;
-	  font-size: 16px;
-	  color: #eaf1ff;
-	  min-height: 24px;
+	  min-height: 22px;
+	  font-size: 15px;
+	  font-weight: 700;
 	}
 	.otp-card {
 	  margin-top: 12px;
-	  border-radius: 18px;
-	  border: 1px solid var(--line);
-	  background: linear-gradient(180deg, rgba(8,18,44,.95), rgba(8,18,44,.8));
 	  padding: 16px;
+	  border-radius: 22px;
+	  background: #f8fbff;
+	  border: 1px solid #dbe7ff;
 	}
 	.otp-code {
-	  font-size: 52px;
-	  letter-spacing: .12em;
+	  font-size: 42px;
 	  font-weight: 800;
-	  color: #f8fdff;
+	  letter-spacing: .08em;
+	  color: var(--accent);
 	}
 	.otp-sub {
 	  margin-top: 8px;
+	  font-size: 13px;
 	  color: var(--muted);
-	  font-size: 14px;
 	}
 	.ring-wrap {
 	  margin-top: 16px;
 	  display: flex;
 	  align-items: center;
-	  gap: 14px;
+	  gap: 10px;
 	}
 	.ring {
 	  --pct: 0;
-	  width: 74px;
-	  height: 74px;
+	  width: 62px;
+	  height: 62px;
 	  border-radius: 50%;
-	  background: conic-gradient(var(--accent) calc(var(--pct) * 1%), rgba(148,163,184,.2) 0);
+	  background: conic-gradient(var(--accent) calc(var(--pct) * 1%), #dbe5f5 0);
 	  display: grid;
 	  place-items: center;
 	}
 	.ring::after {
 	  content: '';
-	  width: 56px;
-	  height: 56px;
+	  width: 48px;
+	  height: 48px;
 	  border-radius: 50%;
-	  background: #0c1c3f;
-	  border: 1px solid rgba(148,163,184,.22);
+	  background: #fff;
 	}
 	.ring-sec {
-	  margin-left: -58px;
-	  width: 56px;
+	  margin-left: -53px;
+	  width: 48px;
 	  text-align: center;
-	  font-size: 18px;
-	  font-weight: 700;
+	  font-size: 15px;
+	  font-weight: 800;
+	  color: var(--accent);
 	  z-index: 2;
 	}
 	.copy-btn {
-	  margin-top: 14px;
 	  width: 100%;
+	  margin-top: 14px;
 	}
 	.mini-help {
 	  display: flex;
-	  gap: 10px;
+	  gap: 8px;
 	  flex-wrap: wrap;
-	  color: var(--muted);
-	  font-size: 13px;
 	}
 	.mini-chip {
 	  padding: 8px 12px;
 	  border-radius: 999px;
+	  background: #f8fafc;
 	  border: 1px solid var(--line);
-	  background: rgba(255,255,255,.03);
+	  color: var(--muted);
+	  font-size: 12px;
 	}
-	@media (max-width: 960px) {
-	  .hero { grid-template-columns: 1fr; }
+	.suggest-menu {
+	  position: absolute;
+	  top: calc(100% + 8px);
+	  left: 0;
+	  right: 0;
+	  display: grid;
+	  gap: 0;
+	  padding: 8px;
+	  background: #fff;
+	  border: 1px solid var(--line);
+	  border-radius: 22px;
+	  box-shadow: var(--shadow);
+	  z-index: 25;
 	}
-	@media (max-width: 760px) {
-	  body { padding: 16px; }
-	  .hero-title { font-size: 40px; }
-	  .login-grid, .query-row, .workspace { grid-template-columns: 1fr; }
-	  pre { font-size: 23px; min-height: 280px; }
-	  input, button { font-size: 20px; }
-	  .otp-code { font-size: 40px; }
+	.suggest-item {
+	  display: grid;
+	  grid-template-columns: 1fr auto;
+	  gap: 8px 12px;
+	  text-align: left;
+	  border-radius: 18px;
+	  padding: 14px 14px;
+	  background: #fff;
+	  color: var(--text);
+	}
+	.suggest-item:hover,
+	.suggest-item.active {
+	  background: #f5f8ff;
+	}
+	.suggest-main { display: grid; gap: 4px; }
+	.suggest-title { font-size: 17px; font-weight: 700; }
+	.suggest-meta { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
+	.suggest-live { min-width: 100px; text-align: right; }
+	.suggest-otp {
+	  display: block;
+	  font-size: 24px;
+	  font-weight: 800;
+	  color: var(--accent);
+	  letter-spacing: .05em;
+	}
+	.suggest-sec {
+	  font-size: 12px;
+	  color: var(--muted);
+	}
+	@media (max-width: 860px) {
+	  .workspace { grid-template-columns: 1fr; }
+	  .live-col { position: static; }
+	}
+	@media (max-width: 640px) {
+	  .shell { padding: 10px 10px 20px; }
+	  .brand { font-size: 24px; }
+	  .login-grid,
+	  .query-row { grid-template-columns: 1fr; }
+	  input { font-size: 20px; padding: 16px 18px; }
+	  button { font-size: 16px; }
+	  .otp-code { font-size: 36px; }
 	}
   </style>
 </head><body>
   <main class=\"shell\">
-	<section class=\"hero\">
-	  <div class=\"hero-card\">
-		<div class=\"badge\">Live OTP Console</div>
-		<h1 class=\"hero-title\">OTP lookup that feels instant.</h1>
-		<div class=\"hero-text\">Go tung ky tu, nhin goi y hien ngay ben duoi. Chon nhanh bang chuot hoac phim len/xuong, Enter de lay OTP.</div>
-	  </div>
-	  <div class=\"side-card\">
-		<div class=\"kpi-grid\">
-		  <div class=\"kpi\"><div class=\"kpi-label\">Mode</div><div class=\"kpi-value\">Realtime suggest</div></div>
-		  <div class=\"kpi\"><div class=\"kpi-label\">Access</div><div class=\"kpi-value\">Employee session</div></div>
-		  <div class=\"kpi\"><div class=\"kpi-label\">Source</div><div class=\"kpi-value\">Google Sheet sync</div></div>
-		</div>
-	  </div>
-	</section>
+	<header class=\"appbar\">
+	  <div class=\"brand\">Authenticator OTP<small>Giao dien don gian, tim nhanh, copy nhanh</small></div>
+	  <div class=\"app-chip\"><span class=\"live-dot\"></span> Live</div>
+	</header>
 
-	<section class=\"main-card\">
-	  <form id=\"loginBox\" class=\"login-grid\" method=\"post\" action=\"/login\">
+	<section class=\"panel main-card\">
+	  <form id=\"loginBox\" class=\"__LOGIN_CLASS__\" method=\"post\" action=\"/login\">
 		<div class=\"input-shell\"><input id=\"username\" name=\"username\" placeholder=\"Username\" /></div>
 		<div class=\"input-shell\"><input id=\"password\" name=\"password\" type=\"password\" placeholder=\"Password\" /></div>
 		<button id=\"btnLogin\" class=\"primary\" type=\"submit\">Dang nhap</button>
 	  </form>
 
-	  <div id=\"appBox\" class=\"toolbar hide\">
+	  <div id=\"appBox\" class=\"__APP_CLASS__\">
 		<div class=\"query-row\">
 		  <div class=\"search-wrap\">
-			<div class=\"input-shell\"><input id=\"query\" placeholder=\"Nhap keyword OTP de goi y tu dong...\" autocomplete=\"off\" /></div>
+			<div class=\"input-shell\"><input id=\"query\" placeholder=\"Tim tai khoan OTP...\" autocomplete=\"off\" /></div>
 			<div id=\"suggestions\" class=\"suggest-menu hide\"></div>
 		  </div>
-		  <button id=\"btnLookup\" class=\"primary\">Lay OTP</button>
+		  <button id=\"btnLookup\" class=\"primary\">Lay ma</button>
 		  <button id=\"btnLogout\" class=\"ghost\">Dang xuat</button>
 		</div>
 		<div class=\"mini-help\">
-		  <div class=\"mini-chip\">Arrow up/down: chon goi y</div>
-		  <div class=\"mini-chip\">Enter: chon goi y hoac tim ngay</div>
-		  <div class=\"mini-chip\">Click vao goi y de lay OTP</div>
+		  <div class=\"mini-chip\">Go de loc account</div>
+		  <div class=\"mini-chip\">Enter de mo nhanh</div>
+		  <div class=\"mini-chip\">Click de copy va xem live</div>
 		</div>
 	  </div>
 
 	  <div class=\"status-bar\">
-		<div id=\"status\" class=\"status-main\">Dang kiem tra phien...</div>
-		<div class=\"status-tag\"><span class=\"live-dot\"></span> live session</div>
+		<div id=\"status\" class=\"status-main\">__STATUS_TEXT__</div>
+		<div class=\"app-chip\"><span class=\"live-dot\"></span> Session</div>
 	  </div>
 
 	  <div class=\"workspace\">
 		<div class=\"result-col\">
 		  <div class=\"panel-head\">
-			<div class=\"panel-title\">Result stream</div>
-			<div class=\"panel-title\">OTP output</div>
+			<div class=\"panel-title\">Danh sach OTP</div>
+			<div class=\"panel-title\">Ket qua</div>
 		  </div>
-		  <pre id=\"out\">San sang.</pre>
+		  <pre id=\"out\">__OUTPUT_TEXT__</pre>
 		</div>
 		<div class=\"live-col\">
-		  <div class=\"live-title\">Live OTP</div>
+		  <div class=\"live-title\">OTP dang chon</div>
 		  <div id=\"liveAccount\" class=\"live-account\">Chua chon account</div>
 		  <div class=\"otp-card\">
 			<div id=\"liveCode\" class=\"otp-code\">------</div>
-			<div id=\"liveMeta\" class=\"otp-sub\">Chon goi y ben trai de xem OTP realtime</div>
+			<div id=\"liveMeta\" class=\"otp-sub\">Chon tai khoan de xem ma OTP dang chay</div>
 			<div class=\"ring-wrap\">
 			  <div id=\"liveRing\" class=\"ring\" style=\"--pct:0\"></div>
 			  <div id=\"liveSec\" class=\"ring-sec\">0s</div>
 			</div>
-			<button id=\"btnCopyLive\" class=\"primary copy-btn\">Copy OTP</button>
+			<button id=\"btnCopyLive\" class=\"primary copy-btn\">Copy ma OTP</button>
 		  </div>
 		</div>
 	  </div>
@@ -1065,6 +1021,13 @@ def _html_page() -> str:
 	checkSession();
   </script>
 </body></html>"""
+	return (
+		html_text
+		.replace("__LOGIN_CLASS__", login_class)
+		.replace("__APP_CLASS__", app_class)
+		.replace("__STATUS_TEXT__", html.escape(status_text, quote=False))
+		.replace("__OUTPUT_TEXT__", html.escape(output_text, quote=False))
+	)
 
 
 class OTPWebHandler(BaseHTTPRequestHandler):
@@ -1160,7 +1123,11 @@ class OTPWebHandler(BaseHTTPRequestHandler):
 	def do_GET(self) -> None:
 		parsed = urlparse(self.path)
 		if parsed.path in {"/", "/index.html"}:
-			self._send_html(_html_page())
+			params = parse_qs(parsed.query or "")
+			login_error = ((params.get("login_error") or [""])[0] == "1")
+			session = self._current_session()
+			session_text = self._session_text(session or {}) if session else "Dang kiem tra phien..."
+			self._send_html(_html_page(authenticated=bool(session), session_text=session_text, login_error=login_error))
 			return
 		if parsed.path == "/favicon.ico":
 			self.send_response(204)
