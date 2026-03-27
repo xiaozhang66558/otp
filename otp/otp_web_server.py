@@ -86,6 +86,7 @@ WEB_SESSION_TTL_SECONDS = max(int(os.environ.get("OTP_WEB_SESSION_TTL_SECONDS", 
 WEB_ALLOWED_TIME_WINDOW = _parse_allowed_window(os.environ.get("OTP_WEB_ALLOWED_TIME_WINDOW", "").strip())
 WEB_SHEET_REFRESH_SECONDS = max(int(os.environ.get("OTP_WEB_SHEET_REFRESH_SECONDS", "15") or "15"), 5)
 WEB_TIMEZONE = os.environ.get("OTP_WEB_TIMEZONE", "Asia/Ho_Chi_Minh").strip() or "Asia/Ho_Chi_Minh"
+WEB_SESSION_BIND_IP = _bool_from_env("OTP_WEB_SESSION_BIND_IP", False)
 
 GOOGLE_SHEET_ID = os.environ.get("GOOGLE_SHEET_ID", "").strip()
 GOOGLE_SHEET_NAME = (
@@ -164,7 +165,7 @@ def _create_session(client_ip: str, username: str) -> str:
 		_cleanup_sessions(now)
 		_SESSIONS[raw] = {
 			"username": username,
-			"client_ip": client_ip,
+			"client_ip": client_ip if WEB_SESSION_BIND_IP else "",
 			"created_at": now,
 			"last_seen": now,
 			"expires_at": now + WEB_SESSION_TTL_SECONDS,
@@ -182,7 +183,7 @@ def _get_session(signed: str, client_ip: str) -> Optional[Dict[str, Any]]:
 		session = _SESSIONS.get(raw)
 		if not session:
 			return None
-		if session.get("client_ip") and session.get("client_ip") != client_ip:
+		if WEB_SESSION_BIND_IP and session.get("client_ip") and session.get("client_ip") != client_ip:
 			return None
 		session["last_seen"] = now
 		session["expires_at"] = now + WEB_SESSION_TTL_SECONDS
@@ -1134,6 +1135,8 @@ class OTPWebHandler(BaseHTTPRequestHandler):
 		data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
 		self.send_response(code)
 		self.send_header("Content-Type", "application/json; charset=utf-8")
+		self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+		self.send_header("Pragma", "no-cache")
 		self.send_header("Content-Length", str(len(data)))
 		self.end_headers()
 		self.wfile.write(data)
@@ -1142,6 +1145,8 @@ class OTPWebHandler(BaseHTTPRequestHandler):
 		data = html.encode("utf-8")
 		self.send_response(200)
 		self.send_header("Content-Type", "text/html; charset=utf-8")
+		self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+		self.send_header("Pragma", "no-cache")
 		self.send_header("Content-Length", str(len(data)))
 		self.end_headers()
 		self.wfile.write(data)
@@ -1415,6 +1420,7 @@ def main() -> int:
 	print(f"Sheet refresh interval: {WEB_SHEET_REFRESH_SECONDS}s")
 	if WEB_USERS:
 		print(f"Web users loaded: {len(WEB_USERS)}")
+	print(f"Session bind IP: {WEB_SESSION_BIND_IP}")
 	if WEB_ALLOWED_IPS:
 		print(f"Allowed IPs: {','.join(sorted(WEB_ALLOWED_IPS))}")
 	if WEB_ALLOWED_TIME_WINDOW:
