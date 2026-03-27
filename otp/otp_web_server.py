@@ -7,11 +7,10 @@ import os
 import secrets
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, Optional, Set, Tuple
 from urllib.parse import parse_qs, urlparse
-from zoneinfo import ZoneInfo
 
 from telegram_otp_listener import force_restore_csv_from_google_sheet, generate_totp_code, load_csv_rows, process_getotp_query
 
@@ -198,13 +197,21 @@ def _delete_session(signed: str) -> None:
 		_SESSIONS.pop(raw, None)
 
 
+def _now_vn() -> datetime:
+	"""Return current time in Vietnam timezone (UTC+7, no DST)."""
+	try:
+		import zoneinfo
+		return datetime.now(zoneinfo.ZoneInfo(WEB_TIMEZONE))
+	except Exception:
+		# Fallback: UTC+7 offset requires no system timezone data
+		vn_tz = timezone(timedelta(hours=7))
+		return datetime.now(vn_tz)
+
+
 def _is_time_window_allowed() -> bool:
 	if WEB_ALLOWED_TIME_WINDOW is None:
 		return True
-	try:
-		now = datetime.now(ZoneInfo(WEB_TIMEZONE))
-	except Exception:
-		now = datetime.now()
+	now = _now_vn()
 	now_m = now.hour * 60 + now.minute
 	start, end = WEB_ALLOWED_TIME_WINDOW
 	if start <= end:
@@ -1163,13 +1170,12 @@ class OTPWebHandler(BaseHTTPRequestHandler):
 			if not self._is_ip_allowed(ip):
 				self._send_json(403, {"ok": False, "authenticated": False, "error": "ip not allowed"})
 				return
-			if not _is_time_window_allowed():
-				self._send_json(403, {"ok": False, "authenticated": False, "error": "outside allowed time"})
-				return
 			session = self._current_session()
 			if not session:
 				self._send_json(200, {"ok": True, "authenticated": False})
 				return
+			# Inform frontend about time window but never block authentication.
+			time_ok = _is_time_window_allowed()
 			self._send_json(
 				200,
 				{
@@ -1177,6 +1183,7 @@ class OTPWebHandler(BaseHTTPRequestHandler):
 					"authenticated": True,
 					"username": session.get("username", ""),
 					"sessionText": self._session_text(session),
+					"timeWindowOk": time_ok,
 				},
 			)
 			return
@@ -1184,9 +1191,6 @@ class OTPWebHandler(BaseHTTPRequestHandler):
 			ip = self._client_ip()
 			if not self._is_ip_allowed(ip):
 				self._send_json(403, {"ok": False, "items": [], "error": "ip not allowed"})
-				return
-			if not _is_time_window_allowed():
-				self._send_json(403, {"ok": False, "items": [], "error": "outside allowed time"})
 				return
 			session = self._current_session()
 			if WEB_REQUIRE_KEY and not session:
@@ -1202,9 +1206,6 @@ class OTPWebHandler(BaseHTTPRequestHandler):
 			ip = self._client_ip()
 			if not self._is_ip_allowed(ip):
 				self._send_json(403, {"ok": False, "error": "ip not allowed"})
-				return
-			if not _is_time_window_allowed():
-				self._send_json(403, {"ok": False, "error": "outside allowed time"})
 				return
 			session = self._current_session()
 			if WEB_REQUIRE_KEY and not session:
@@ -1240,9 +1241,6 @@ class OTPWebHandler(BaseHTTPRequestHandler):
 			ip = self._client_ip()
 			if not self._is_ip_allowed(ip):
 				self._send_json(403, {"ok": False, "items": [], "error": "ip not allowed"})
-				return
-			if not _is_time_window_allowed():
-				self._send_json(403, {"ok": False, "items": [], "error": "outside allowed time"})
 				return
 			session = self._current_session()
 			if WEB_REQUIRE_KEY and not session:
@@ -1294,11 +1292,15 @@ class OTPWebHandler(BaseHTTPRequestHandler):
 		if not self._is_ip_allowed(ip):
 			self._send_json(403, {"ok": False, "error": "ip not allowed"})
 			return
-		if not _is_time_window_allowed():
+
+		# Time-window restriction applies only to OTP lookups, not to login/logout.
+		_time_restricted_paths = {"/api/getotp"}
+		if parsed.path in _time_restricted_paths and not _is_time_window_allowed():
 			self._send_json(403, {"ok": False, "error": "outside allowed time"})
 			return
 
 		if parsed.path == "/login":
+
 			n = int(self.headers.get("Content-Length", "0") or "0")
 			raw = self.rfile.read(n) if n > 0 else b""
 			form = parse_qs(raw.decode("utf-8", errors="ignore"))
