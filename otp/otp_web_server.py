@@ -665,22 +665,31 @@ def _html_page(authenticated: bool = False, session_text: str = "Dang kiem tra p
 
 	async function batchRefresh() {
 	  if (!allAccounts.length) return;
-	  // Refresh in chunks of 50
-	  const chunk = allAccounts.slice(0, 50);
+	  // Chia toàn bộ account thành nhiều batch 50, gọi song song
+	  const batchSize = 50;
+	  const batches = [];
+	  for (let i = 0; i < allAccounts.length; i += batchSize) {
+		batches.push(allAccounts.slice(i, i + batchSize));
+	  }
 	  try {
-		const params = new URLSearchParams();
-		for (const a of chunk) params.append('account', a);
-		const res = await fetch('/api/otp-live-batch?' + params.toString(), { credentials: 'same-origin' });
-		if (res.status === 401) { showLogin(); return; }
-		const d = await res.json();
-		if (d.ok && Array.isArray(d.items)) {
-		  d.items.forEach((item, i) => {
-			if (item && item.ok) {
-			  otpData[chunk[i]] = { code: item.code, remaining: item.remaining, period: item.period || 30 };
-			}
-		  });
-		  renderList();
-		}
+		const results = await Promise.all(batches.map(async (chunk) => {
+		  const params = new URLSearchParams();
+		  for (const a of chunk) params.append('account', a);
+		  const res = await fetch('/api/otp-live-batch?' + params.toString(), { credentials: 'same-origin' });
+		  if (res.status === 401) { showLogin(); return null; }
+		  const d = await res.json();
+		  if (d.ok && Array.isArray(d.items)) {
+			return d.items.map((item, i) => ({ name: chunk[i], ...item }));
+		  }
+		  return [];
+		}));
+		// Ghép kết quả lại
+		results.flat().forEach((item) => {
+		  if (item && item.ok) {
+			otpData[item.name] = { code: item.code, remaining: item.remaining, period: item.period || 30 };
+		  }
+		});
+		renderList();
 	  } catch(e) {}
 	}
 
