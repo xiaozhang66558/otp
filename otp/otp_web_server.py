@@ -638,9 +638,17 @@ def _html_page(authenticated: bool = False, session_text: str = "Dang kiem tra p
 			+ '</div>';
 	}).join('');
 
-	otpList.querySelectorAll('.otp-row').forEach(row => {
-		row.addEventListener('click', () => selectAccount(row));
-	});
+	// Event delegation: chỉ gắn 1 lần cho otpList
+	if (!window._otpListClickBound) {
+		otpList.addEventListener('click', function(e) {
+			let row = e.target;
+			while (row && !row.classList.contains('otp-row') && row !== otpList) row = row.parentElement;
+			if (row && row.classList && row.classList.contains('otp-row')) {
+				selectAccount(row);
+			}
+		});
+		window._otpListClickBound = true;
+	}
 	}
 
 
