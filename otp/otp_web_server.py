@@ -302,10 +302,11 @@ def _find_secret_by_account(account_name: str, csv_path: str) -> Tuple[Optional[
 
 
 def _html_page(authenticated: bool = False, session_text: str = "Dang kiem tra phien...", login_error: bool = False) -> str:
-	login_class = "login-grid hide" if authenticated else "login-grid"
-	app_class = "toolbar" if authenticated else "toolbar hide"
-	status_text = session_text if authenticated else ("Dang nhap that bai. Kiem tra lai tai khoan/mat khau." if login_error else "Dang kiem tra phien...")
-	output_text = "Dang nhap thanh cong." if authenticated else ("Dang nhap that bai: invalid credentials" if login_error else "San sang.")
+	status_text = session_text if authenticated else ("Dang nhap that bai. Kiem tra lai tai khoan/mat khau." if login_error else "")
+	is_auth_js = "true" if authenticated else "false"
+	err_vis = "" if login_error else ' style="display:none"'
+	login_vis = ' style="display:none"' if authenticated else ""
+	app_vis = "" if authenticated else ' style="display:none"'
 	html_text = """<!doctype html>
 <html lang=\"vi\"><head>
   <meta charset=\"utf-8\" />
@@ -313,720 +314,444 @@ def _html_page(authenticated: bool = False, session_text: str = "Dang kiem tra p
   <title>Nefitly OTP</title>
   <style>
 	:root {
-	  --bg:#f3f5f9;
-	  --panel:#ffffff;
-	  --line:#e5e9f2;
-	  --text:#162033;
-	  --muted:#6f7d95;
-	  --accent:#2563eb;
-	  --accent-soft:#e8f0ff;
-	  --success:#16a34a;
-	  --shadow:0 18px 46px rgba(16, 24, 40, .08);
+	  --bg:#f2f2f7;
+	  --white:#ffffff;
+	  --line:#e5e5ea;
+	  --text:#1c1c1e;
+	  --sub:#8e8e93;
+	  --accent:#007aff;
+	  --otp:#b71c1c;
 	}
-	* { box-sizing: border-box; }
+	* { box-sizing: border-box; margin: 0; padding: 0; }
 	body {
-	  margin: 0;
+	  background: var(--bg);
+	  color: var(--text);
+	  font-family: -apple-system, 'SF Pro Text', 'Segoe UI', sans-serif;
 	  min-height: 100vh;
-	  color: var(--text);
-	  font-family: 'Segoe UI', 'SF Pro Text', -apple-system, sans-serif;
-	  background: linear-gradient(180deg, #f8fafc, #eef2f8 36%, #edf1f7);
 	}
-	.shell {
-	  max-width: 920px;
-	  margin: 0 auto;
-	  padding: 20px 16px 28px;
-	}
-	.appbar {
+
+	/* ---- LOGIN PAGE ---- */
+	.login-page {
 	  display: flex;
+	  flex-direction: column;
 	  align-items: center;
-	  justify-content: space-between;
-	  gap: 12px;
-	  margin-bottom: 18px;
+	  justify-content: center;
+	  min-height: 100vh;
+	  padding: 24px;
 	}
-	.brand {
-	  font-size: 30px;
-	  font-weight: 800;
-	  letter-spacing: -.03em;
-	}
-	.brand small {
-	  display: block;
-	  margin-top: 4px;
-	  font-size: 13px;
-	  font-weight: 600;
-	  color: var(--muted);
-	  letter-spacing: 0;
-	}
-	.app-chip {
-	  display: inline-flex;
-	  align-items: center;
-	  gap: 8px;
-	  padding: 10px 14px;
-	  border-radius: 999px;
-	  background: #fff;
-	  border: 1px solid var(--line);
-	  color: var(--muted);
-	  box-shadow: var(--shadow);
-	  font-size: 13px;
-	}
-	.live-dot {
-	  width: 8px;
-	  height: 8px;
-	  border-radius: 50%;
-	  background: var(--success);
-	}
-	.panel {
-	  background: var(--panel);
-	  border: 1px solid var(--line);
-	  border-radius: 28px;
-	  box-shadow: var(--shadow);
-	}
-	.main-card {
-	  padding: 18px;
-	}
-	.login-grid {
-	  display: grid;
-	  grid-template-columns: 1fr 1fr auto;
-	  gap: 12px;
-	}
-	.toolbar {
-	  display: grid;
-	  gap: 12px;
-	}
-	.query-row {
-	  display: grid;
-	  grid-template-columns: 1fr auto auto;
-	  gap: 10px;
-	  align-items: start;
-	}
-	.search-wrap { position: relative; }
-	.input-shell {
-	  border-radius: 20px;
-	  background: var(--accent-soft);
-	  border: 1px solid #d9e4fb;
-	  padding: 0;
-	}
-	.input-shell:focus-within {
-	  border-color: #8eb2ff;
-	  box-shadow: 0 0 0 4px rgba(37, 99, 235, .08);
-	}
-	input {
+	.login-card {
 	  width: 100%;
-	  border: 0;
-	  outline: 0;
-	  background: transparent;
-	  color: var(--text);
-	  font-size: 24px;
+	  max-width: 360px;
+	  background: var(--white);
+	  border-radius: 18px;
+	  padding: 32px 28px;
+	  box-shadow: 0 4px 24px rgba(0,0,0,.09);
+	}
+	.login-title {
+	  font-size: 22px;
 	  font-weight: 700;
-	  padding: 18px 20px;
-	  border-radius: 20px;
+	  margin-bottom: 6px;
 	}
-	input::placeholder {
-	  color: #8a97ac;
-	  font-weight: 600;
-	}
-	button {
-	  border: 0;
-	  border-radius: 18px;
-	  cursor: pointer;
-	  padding: 16px 18px;
-	  font-size: 17px;
-	  font-weight: 800;
-	}
-	.primary {
-	  color: #fff;
-	  background: linear-gradient(180deg, #3b82f6, #2563eb);
-	}
-	.ghost {
-	  color: var(--text);
-	  background: #f7f9fc;
-	  border: 1px solid var(--line);
-	}
-	.hide { display: none; }
-	.status-bar {
-	  display: flex;
-	  align-items: center;
-	  justify-content: space-between;
-	  gap: 10px;
-	  margin: 14px 0;
-	  padding: 12px 14px;
-	  border-radius: 18px;
-	  background: #f8fafc;
-	  border: 1px solid var(--line);
-	}
-	.status-main {
+	.login-sub {
 	  font-size: 14px;
-	  color: var(--muted);
+	  color: var(--sub);
+	  margin-bottom: 28px;
 	}
-	.workspace {
-	  display: grid;
-	  grid-template-columns: minmax(0, 1fr) 280px;
-	  gap: 16px;
-	  align-items: start;
-	}
-	.result-col,
-	.live-col {
+	.login-field {
+	  width: 100%;
+	  height: 48px;
 	  border: 1px solid var(--line);
-	  border-radius: 24px;
-	  background: #fff;
+	  border-radius: 12px;
+	  padding: 0 14px;
+	  font-size: 16px;
+	  background: var(--bg);
+	  color: var(--text);
+	  outline: none;
+	  margin-bottom: 14px;
 	}
-	.result-col { overflow: hidden; }
-	.panel-head {
+	.login-field:focus { border-color: var(--accent); }
+	.login-btn {
+	  width: 100%;
+	  height: 48px;
+	  border: none;
+	  border-radius: 12px;
+	  background: var(--accent);
+	  color: #fff;
+	  font-size: 17px;
+	  font-weight: 600;
+	  cursor: pointer;
+	  margin-top: 4px;
+	}
+	.err-msg {
+	  color: #d32f2f;
+	  font-size: 13px;
+	  margin-bottom: 12px;
+	}
+
+	/* ---- APP PAGE ---- */
+	.app-page { display: flex; flex-direction: column; height: 100vh; }
+	.topbar {
+	  background: var(--white);
+	  border-bottom: 1px solid var(--line);
+	  padding: 14px 16px 10px;
+	  position: sticky;
+	  top: 0;
+	  z-index: 20;
+	}
+	.topbar-row1 {
 	  display: flex;
 	  align-items: center;
 	  justify-content: space-between;
-	  padding: 14px 16px 0;
+	  margin-bottom: 12px;
 	}
-	.panel-title {
-	  font-size: 13px;
-	  color: var(--muted);
-	  text-transform: uppercase;
-	  letter-spacing: .08em;
-	}
-	pre {
-	  margin: 0;
-	  min-height: 180px;
-	  padding: 18px 16px 22px;
-	  white-space: pre-wrap;
-	  font-size: 18px;
-	  line-height: 1.5;
-	  color: var(--text);
-	  background: #fff;
-	}
-	.live-col {
-	  padding: 16px;
-	  position: sticky;
-	  top: 16px;
-	}
-	.live-title {
-	  font-size: 13px;
-	  color: var(--muted);
-	  text-transform: uppercase;
-	  letter-spacing: .08em;
-	}
-	.live-account {
-	  margin-top: 8px;
-	  min-height: 22px;
-	  font-size: 15px;
+	.app-title {
+	  font-size: 22px;
 	  font-weight: 700;
 	}
-	.otp-card {
-	  margin-top: 12px;
-	  padding: 16px;
-	  border-radius: 22px;
-	  background: #f8fbff;
-	  border: 1px solid #dbe7ff;
+	.logout-btn {
+	  height: 34px;
+	  padding: 0 16px;
+	  border: 1px solid var(--line);
+	  border-radius: 999px;
+	  background: transparent;
+	  color: var(--sub);
+	  font-size: 14px;
+	  cursor: pointer;
 	}
-	.otp-code {
-	  font-size: 42px;
-	  font-weight: 800;
-	  letter-spacing: .08em;
-	  color: var(--accent);
+	.search-bar {
+	  width: 100%;
+	  height: 42px;
+	  background: var(--bg);
+	  border: none;
+	  border-radius: 12px;
+	  padding: 0 14px 0 38px;
+	  font-size: 16px;
+	  color: var(--text);
+	  outline: none;
 	}
-	.otp-sub {
-	  margin-top: 8px;
-	  font-size: 13px;
-	  color: var(--muted);
+	.search-wrap {
+	  position: relative;
 	}
-	.ring-wrap {
-	  margin-top: 16px;
+	.search-icon {
+	  position: absolute;
+	  left: 11px;
+	  top: 50%;
+	  transform: translateY(-50%);
+	  width: 18px;
+	  height: 18px;
+	  color: var(--sub);
+	  pointer-events: none;
+	}
+	.otp-list {
+	  flex: 1;
+	  overflow-y: auto;
+	  padding: 8px 0 40px;
+	}
+	.otp-row {
+	  background: var(--white);
+	  display: flex;
+	  align-items: center;
+	  justify-content: space-between;
+	  padding: 18px 20px;
+	  border-bottom: 1px solid var(--line);
+	  cursor: pointer;
+	  transition: background .1s;
+	}
+	.otp-row:first-child { border-top: 1px solid var(--line); }
+	.otp-row:hover { background: #f9f9f9; }
+	.otp-row:active { background: #f0f0f5; }
+	.otp-name {
+	  font-size: 15px;
+	  color: var(--sub);
+	  margin-bottom: 4px;
+	}
+	.otp-code-big {
+	  font-size: 36px;
+	  font-weight: 400;
+	  color: var(--otp);
+	  letter-spacing: .04em;
+	}
+	.otp-right {
 	  display: flex;
 	  align-items: center;
 	  gap: 10px;
 	}
-	.ring {
-	  --pct: 0;
-	  width: 62px;
-	  height: 62px;
-	  border-radius: 50%;
-	  background: conic-gradient(var(--accent) calc(var(--pct) * 1%), #dbe5f5 0);
-	  display: grid;
-	  place-items: center;
+	.otp-timer {
+	  position: relative;
+	  width: 32px;
+	  height: 32px;
+	  flex-shrink: 0;
 	}
-	.ring::after {
-	  content: '';
-	  width: 48px;
-	  height: 48px;
-	  border-radius: 50%;
-	  background: #fff;
+	.otp-timer svg {
+	  transform: rotate(-90deg);
 	}
-	.ring-sec {
-	  margin-left: -53px;
-	  width: 48px;
-	  text-align: center;
-	  font-size: 15px;
-	  font-weight: 800;
-	  color: var(--accent);
-	  z-index: 2;
-	}
-	.copy-btn {
-	  width: 100%;
-	  margin-top: 14px;
-	}
-	.mini-help {
-	  display: flex;
-	  gap: 8px;
-	  flex-wrap: wrap;
-	}
-	.mini-chip {
-	  padding: 8px 12px;
-	  border-radius: 999px;
-	  background: #f8fafc;
-	  border: 1px solid var(--line);
-	  color: var(--muted);
-	  font-size: 12px;
-	}
-	.suggest-menu {
+	.otp-timer-text {
 	  position: absolute;
-	  top: calc(100% + 8px);
-	  left: 0;
-	  right: 0;
-	  display: grid;
-	  gap: 0;
-	  padding: 8px;
-	  background: #fff;
-	  border: 1px solid var(--line);
-	  border-radius: 22px;
-	  box-shadow: var(--shadow);
-	  z-index: 25;
+	  inset: 0;
+	  display: flex;
+	  align-items: center;
+	  justify-content: center;
+	  font-size: 10px;
+	  font-weight: 700;
+	  color: var(--otp);
 	}
-	.suggest-item {
-	  display: grid;
-	  grid-template-columns: 1fr auto;
-	  gap: 8px 12px;
-	  text-align: left;
-	  border-radius: 18px;
-	  padding: 14px 14px;
-	  background: #fff;
-	  color: var(--text);
+	.otp-copy-icon {
+	  color: var(--sub);
+	  opacity: .5;
 	}
-	.suggest-item:hover,
-	.suggest-item.active {
-	  background: #f5f8ff;
+	.empty-msg {
+	  text-align: center;
+	  color: var(--sub);
+	  font-size: 15px;
+	  padding: 40px 20px;
 	}
-	.suggest-main { display: grid; gap: 4px; }
-	.suggest-title { font-size: 17px; font-weight: 700; }
-	.suggest-meta { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
-	.suggest-live { min-width: 100px; text-align: right; }
-	.suggest-otp {
-	  display: block;
-	  font-size: 24px;
-	  font-weight: 800;
-	  color: var(--accent);
-	  letter-spacing: .05em;
-	}
-	.suggest-sec {
+	.status-chip {
 	  font-size: 12px;
-	  color: var(--muted);
+	  color: var(--sub);
+	  text-align: center;
+	  padding: 8px;
 	}
-	@media (max-width: 860px) {
-	  .workspace { grid-template-columns: 1fr; }
-	  .live-col { position: static; }
+	.spinner {
+	  display: inline-block;
+	  width: 18px;
+	  height: 18px;
+	  border: 2px solid var(--line);
+	  border-top-color: var(--accent);
+	  border-radius: 50%;
+	  animation: spin .7s linear infinite;
+	  vertical-align: middle;
+	  margin-right: 6px;
 	}
-	@media (max-width: 640px) {
-	  .shell { padding: 10px 10px 20px; }
-	  .brand { font-size: 24px; }
-	  .login-grid,
-	  .query-row { grid-template-columns: 1fr; }
-	  input { font-size: 20px; padding: 16px 18px; }
-	  button { font-size: 16px; }
-	  .otp-code { font-size: 36px; }
-	}
+	@keyframes spin { to { transform: rotate(360deg); } }
+	/* copy flash */
+	.otp-row.copied .otp-code-big { color: #2e7d32; }
   </style>
 </head><body>
-  <main class=\"shell\">
-	<header class=\"appbar\">
-	  <div class=\"brand\">Authenticator OTP<small>Giao dien don gian, tim nhanh, copy nhanh</small></div>
-	  <div class=\"app-chip\"><span class=\"live-dot\"></span> Live</div>
-	</header>
 
-	<section class=\"panel main-card\">
-	  <form id=\"loginBox\" class=\"__LOGIN_CLASS__\" method=\"post\" action=\"/login\">
-		<div class=\"input-shell\"><input id=\"username\" name=\"username\" placeholder=\"Username\" /></div>
-		<div class=\"input-shell\"><input id=\"password\" name=\"password\" type=\"password\" placeholder=\"Password\" /></div>
-		<button id=\"btnLogin\" class=\"primary\" type=\"submit\">Dang nhap</button>
+  <!-- LOGIN PAGE -->
+  <div id=\"loginPage\" class=\"login-page\"__LOGIN_VIS__>
+	<div class=\"login-card\">
+	  <div class=\"login-title\">Nefitly OTP</div>
+	  <div class=\"login-sub\">Dang nhap de xem ma xac thuc</div>
+	  <div id=\"errMsg\" class=\"err-msg\"__ERR_VIS__>Sai tai khoan hoac mat khau.</div>
+	  <form method=\"post\" action=\"/login\">
+		<input class=\"login-field\" name=\"username\" type=\"text\" placeholder=\"Ten tai khoan\" autocomplete=\"username\" required />
+		<input class=\"login-field\" name=\"password\" type=\"password\" placeholder=\"Mat khau\" autocomplete=\"current-password\" required />
+		<button class=\"login-btn\" type=\"submit\">Dang nhap</button>
 	  </form>
+	</div>
+  </div>
 
-	  <div id=\"appBox\" class=\"__APP_CLASS__\">
-		<div class=\"query-row\">
-		  <div class=\"search-wrap\">
-			<div class=\"input-shell\"><input id=\"query\" placeholder=\"Tim tai khoan OTP...\" autocomplete=\"off\" /></div>
-			<div id=\"suggestions\" class=\"suggest-menu hide\"></div>
-		  </div>
-		  <button id=\"btnLookup\" class=\"primary\">Lay ma</button>
-		  <button id=\"btnLogout\" class=\"ghost\">Dang xuat</button>
-		</div>
-		<div class=\"mini-help\">
-		  <div class=\"mini-chip\">Go de loc account</div>
-		  <div class=\"mini-chip\">Enter de mo nhanh</div>
-		  <div class=\"mini-chip\">Click de copy va xem live</div>
-		</div>
+  <!-- APP PAGE -->
+  <div id=\"appPage\" class=\"app-page\"__APP_VIS__>
+	<div class=\"topbar\">
+	  <div class=\"topbar-row1\">
+		<div class=\"app-title\">Authenticator</div>
+		<button class=\"logout-btn\" id=\"btnLogout\">Dang xuat</button>
 	  </div>
-
-	  <div class=\"status-bar\">
-		<div id=\"status\" class=\"status-main\">__STATUS_TEXT__</div>
-		<div class=\"app-chip\"><span class=\"live-dot\"></span> Session</div>
+	  <div class=\"search-wrap\">
+		<svg class=\"search-icon\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><circle cx=\"11\" cy=\"11\" r=\"8\"/><line x1=\"21\" y1=\"21\" x2=\"16.65\" y2=\"16.65\"/></svg>
+		<input id=\"searchInput\" class=\"search-bar\" type=\"text\" placeholder=\"Tim kiem...\" autocomplete=\"off\" />
 	  </div>
-
-	  <div class=\"workspace\">
-		<div class=\"result-col\">
-		  <div class=\"panel-head\">
-			<div class=\"panel-title\">Danh sach OTP</div>
-			<div class=\"panel-title\">Ket qua</div>
-		  </div>
-		  <pre id=\"out\">__OUTPUT_TEXT__</pre>
-		</div>
-		<div class=\"live-col\">
-		  <div class=\"live-title\">OTP dang chon</div>
-		  <div id=\"liveAccount\" class=\"live-account\">Chua chon account</div>
-		  <div class=\"otp-card\">
-			<div id=\"liveCode\" class=\"otp-code\">------</div>
-			<div id=\"liveMeta\" class=\"otp-sub\">Chon tai khoan de xem ma OTP dang chay</div>
-			<div class=\"ring-wrap\">
-			  <div id=\"liveRing\" class=\"ring\" style=\"--pct:0\"></div>
-			  <div id=\"liveSec\" class=\"ring-sec\">0s</div>
-			</div>
-			<button id=\"btnCopyLive\" class=\"primary copy-btn\">Copy ma OTP</button>
-		  </div>
-		</div>
-	  </div>
-	</section>
-  </main>
+	</div>
+	<div id=\"otpList\" class=\"otp-list\">
+	  <div class=\"empty-msg\"><span class=\"spinner\"></span> Dang tai danh sach...</div>
+	</div>
+	<div id=\"statusBar\" class=\"status-chip\">__STATUS_TEXT__</div>
+  </div>
 
   <script>
-	const loginBox = document.getElementById('loginBox');
-	const appBox = document.getElementById('appBox');
-	const status = document.getElementById('status');
-	const out = document.getElementById('out');
-	const loginForm = document.getElementById('loginBox');
-	const queryInput = document.getElementById('query');
-	const suggestBox = document.getElementById('suggestions');
-	const btnLookup = document.getElementById('btnLookup');
-	const liveAccount = document.getElementById('liveAccount');
-	const liveCode = document.getElementById('liveCode');
-	const liveMeta = document.getElementById('liveMeta');
-	const liveRing = document.getElementById('liveRing');
-	const liveSec = document.getElementById('liveSec');
-	const btnCopyLive = document.getElementById('btnCopyLive');
-	const pageParams = new URLSearchParams(window.location.search);
-	let suggestTimer = null;
-	let suggestOtpTimer = null;
-	let currentSuggestions = [];
-	let activeSuggestionIndex = -1;
-	let liveAccountName = '';
-	let liveTimer = null;
+	const IS_AUTH = __IS_AUTH__;
+	const loginPage = document.getElementById('loginPage');
+	const appPage = document.getElementById('appPage');
+	const searchInput = document.getElementById('searchInput');
+	const otpList = document.getElementById('otpList');
+	const statusBar = document.getElementById('statusBar');
 
-	async function readJsonSafe(res) {
-	  const raw = await res.text();
-	  try {
-		return JSON.parse(raw || '{}');
-	  } catch (e) {
-		return { ok:false, error: 'invalid server response', raw };
-	  }
+	// ---- OTP list state ----
+	let allAccounts = [];     // all account names from server
+	let otpData = {};         // account -> { code, remaining, period }
+	let tickInterval = null;
+	let refreshInterval = null;
+	let filterText = '';
+
+	// ---- Utility ----
+	function fmtCode(code) {
+	  const s = String(code || '------').replace(/\\s/g, '');
+	  if (s.length === 6) return s.slice(0,3) + ' ' + s.slice(3);
+	  return s;
 	}
 
-	function setOutput(text) {
-	  out.textContent = text;
-	}
-
-	if (pageParams.get('login_error') === '1') {
-	  status.textContent = 'Dang nhap that bai. Kiem tra lai tai khoan/mat khau.';
-	  setOutput('Dang nhap that bai: invalid credentials');
-	  if (window.history && window.history.replaceState) {
-		window.history.replaceState({}, '', '/');
-	  }
-	}
-
-	function setLiveStateEmpty(msg) {
-	  liveAccountName = '';
-	  liveAccount.textContent = 'Chua chon account';
-	  liveCode.textContent = '------';
-	  liveMeta.textContent = msg || 'Chon goi y ben trai de xem OTP realtime';
-	  liveRing.style.setProperty('--pct', 0);
-	  liveSec.textContent = '0s';
-	}
-
-	function parseAccountFromText(text) {
-	  const lines = String(text || '').split('\n');
-	  for (const ln of lines) {
-		const s = ln.trim();
-		if (s.startsWith('Account:')) {
-		  return s.slice('Account:'.length).trim();
-		}
-	  }
-	  return '';
-	}
-
-	function updateLiveVisual(code, remaining, period) {
-	  const safeCode = String(code || '------');
+	function timerSvg(remaining, period) {
+	  const r = 13;
+	  const circ = 2 * Math.PI * r;
 	  const rem = Math.max(0, Number(remaining || 0));
 	  const per = Math.max(1, Number(period || 30));
-	  const pct = Math.max(0, Math.min(100, (rem / per) * 100));
-	  liveCode.textContent = safeCode;
-	  liveSec.textContent = rem + 's';
-	  liveRing.style.setProperty('--pct', pct.toFixed(1));
-	  liveMeta.textContent = 'Tu dong lam moi moi giay';
+	  const pct = rem / per;
+	  const dash = circ * pct;
+	  const clr = rem <= 5 ? '#ff3b30' : '#b71c1c';
+	  return '<svg width="32" height="32" viewBox="0 0 32 32">'
+		+ '<circle cx="16" cy="16" r="' + r + '" fill="none" stroke="#e5e5ea" stroke-width="3"/>'
+		+ '<circle cx="16" cy="16" r="' + r + '" fill="none" stroke="' + clr + '" stroke-width="3"'
+		+ ' stroke-dasharray="' + dash.toFixed(1) + ' ' + circ.toFixed(1) + '"'
+		+ ' stroke-linecap="round"/>'
+		+ '</svg>'
+		+ '<div class="otp-timer-text" style="color:' + clr + '">' + rem + '</div>';
 	}
 
-	async function refreshLiveOtp() {
-	  if (!liveAccountName) return;
-	  try {
-		const res = await fetch('/api/otp-live?account=' + encodeURIComponent(liveAccountName), { credentials:'same-origin' });
-		if (res.status === 401) {
-		  if (liveTimer) clearInterval(liveTimer);
-		  liveTimer = null;
-		  setLiveStateEmpty('Het phien. Vui long dang nhap lai.');
-		  await checkSession();
-		  return;
-		}
-		const d = await res.json();
-		if (!d.ok) {
-		  liveMeta.textContent = d.error || 'Khong lay duoc OTP live';
-		  return;
-		}
-		liveAccount.textContent = d.account || liveAccountName;
-		updateLiveVisual(d.code, d.remaining, d.period || 30);
-	  } catch (e) {
-		liveMeta.textContent = 'Loi ket noi live OTP';
+	function copyIcon() {
+	  return '<svg class="otp-copy-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
+	}
+
+	// ---- Render ----
+	function renderList() {
+	  const q = filterText.toLowerCase().trim();
+	  const visible = q
+		? allAccounts.filter(a => a.toLowerCase().includes(q))
+		: allAccounts;
+
+	  if (!visible.length) {
+		otpList.innerHTML = '<div class="empty-msg">' + (allAccounts.length ? 'Khong tim thay ket qua.' : 'Chua co tai khoan nao.') + '</div>';
+		return;
 	  }
-	}
 
-	function startLiveOtp(accountName) {
-	  const acc = String(accountName || '').trim();
-	  if (!acc) return;
-	  liveAccountName = acc;
-	  liveAccount.textContent = acc;
-	  liveMeta.textContent = 'Dang dong bo OTP live...';
-	  refreshLiveOtp();
-	  if (liveTimer) clearInterval(liveTimer);
-	  liveTimer = setInterval(refreshLiveOtp, 1000);
-	}
+	  otpList.innerHTML = visible.map(name => {
+		const d = otpData[name] || {};
+		const code = fmtCode(d.code);
+		const rem = d.remaining !== undefined ? d.remaining : 30;
+		const per = d.period || 30;
+		return '<div class="otp-row" data-name="' + name.replace(/"/g,'&quot;') + '">'
+		  + '<div><div class="otp-name">' + name + '</div>'
+		  + '<div class="otp-code-big">' + code + '</div></div>'
+		  + '<div class="otp-right">'
+		  + '<div class="otp-timer">' + timerSvg(rem, per) + '</div>'
+		  + copyIcon()
+		  + '</div>'
+		  + '</div>';
+	  }).join('');
 
-	function showSuggestions() {
-	  suggestBox.classList.remove('hide');
-	}
-
-	function hideSuggestions() {
-	  suggestBox.classList.add('hide');
-	  suggestBox.innerHTML = '';
-	  currentSuggestions = [];
-	  activeSuggestionIndex = -1;
-	  if (suggestOtpTimer) clearInterval(suggestOtpTimer);
-	  suggestOtpTimer = null;
-	}
-
-	function activateSuggestion(index) {
-	  activeSuggestionIndex = index;
-	  suggestBox.querySelectorAll('.suggest-item').forEach((node, idx) => {
-		node.classList.toggle('active', idx === index);
+	  otpList.querySelectorAll('.otp-row').forEach(row => {
+		row.addEventListener('click', () => copyOtp(row));
 	  });
-	  if (index >= 0 && currentSuggestions[index]) {
-		startLiveOtp(currentSuggestions[index]);
+	}
+
+	async function copyOtp(row) {
+	  const name = row.getAttribute('data-name') || '';
+	  const d = otpData[name] || {};
+	  const code = String(d.code || '').replace(/\\s/g, '');
+	  if (!code) return;
+	  try {
+		await navigator.clipboard.writeText(code);
+	  } catch(e) {}
+	  row.classList.add('copied');
+	  setTimeout(() => row.classList.remove('copied'), 1500);
+	}
+
+	// ---- Data loading ----
+	async function loadAccounts() {
+	  try {
+		const res = await fetch('/api/accounts', { credentials: 'same-origin' });
+		if (res.status === 401) { showLogin(); return; }
+		const d = await res.json();
+		if (d.ok) {
+		  allAccounts = d.items || [];
+		  renderList();
+		  batchRefresh();
+		}
+	  } catch (e) {
+		otpList.innerHTML = '<div class="empty-msg">Loi ket noi.</div>';
 	  }
 	}
 
-	async function refreshSuggestionOtps() {
-	  if (!currentSuggestions.length || suggestBox.classList.contains('hide')) return;
+	async function batchRefresh() {
+	  if (!allAccounts.length) return;
+	  // Refresh in chunks of 50
+	  const chunk = allAccounts.slice(0, 50);
 	  try {
 		const params = new URLSearchParams();
-		for (const name of currentSuggestions) params.append('account', name);
-		const res = await fetch('/api/otp-live-batch?' + params.toString(), { credentials:'same-origin' });
-		if (res.status === 401) {
-		  hideSuggestions();
-		  await checkSession();
-		  return;
-		}
+		for (const a of chunk) params.append('account', a);
+		const res = await fetch('/api/otp-live-batch?' + params.toString(), { credentials: 'same-origin' });
+		if (res.status === 401) { showLogin(); return; }
 		const d = await res.json();
-		if (!d.ok || !Array.isArray(d.items)) return;
-		d.items.forEach((item, idx) => {
-		  const otpNode = suggestBox.querySelector('.suggest-otp[data-index="' + idx + '"]');
-		  const secNode = suggestBox.querySelector('.suggest-sec[data-index="' + idx + '"]');
-		  if (!otpNode || !secNode) return;
-		  if (item && item.ok) {
-			otpNode.textContent = String(item.code || '------');
-			secNode.textContent = String(Math.max(0, Number(item.remaining || 0))) + 's';
-		  } else {
-			otpNode.textContent = '------';
-			secNode.textContent = '--';
-		  }
-		});
-	  } catch (e) {
-		// Keep UI responsive if batch live fetch fails.
-	  }
-	}
-
-	async function checkSession() {
-	  try {
-		const res = await fetch('/api/session', { credentials:'same-origin' });
-		const d = await readJsonSafe(res);
-		if (d.ok && d.authenticated) {
-		  loginBox.classList.add('hide');
-		  appBox.classList.remove('hide');
-		  status.textContent = (d.username ? ('Xin chao ' + d.username + '. ') : '') + (d.sessionText || 'Da dang nhap');
-		} else {
-		  loginBox.classList.remove('hide');
-		  appBox.classList.add('hide');
-		  hideSuggestions();
-		  if (liveTimer) clearInterval(liveTimer);
-		  liveTimer = null;
-		  setLiveStateEmpty('Dang xac thuc phien...');
-		  status.textContent = d.error || 'Chua dang nhap.';
+		if (d.ok && Array.isArray(d.items)) {
+		  d.items.forEach((item, i) => {
+			if (item && item.ok) {
+			  otpData[chunk[i]] = { code: item.code, remaining: item.remaining, period: item.period || 30 };
+			}
+		  });
+		  renderList();
 		}
-	  } catch (e) {
-		status.textContent = 'Loi ket noi server';
-	  }
+	  } catch(e) {}
 	}
 
-	async function logout() {
-	  await fetch('/api/logout', { method:'POST', credentials:'same-origin' });
-	  hideSuggestions();
-	  if (liveTimer) clearInterval(liveTimer);
-	  liveTimer = null;
-	  setLiveStateEmpty('Da dang xuat');
-	  setOutput('Da dang xuat.');
-	  await checkSession();
-	}
-
-	async function lookup(forceQuery) {
-	  const query = (forceQuery || queryInput.value).trim();
-	  if (!query) {
-		setOutput('Nhap query truoc.');
-		return;
+	// tick countdown every second
+	function tick() {
+	  let needRefresh = false;
+	  for (const name of allAccounts) {
+		const d = otpData[name];
+		if (!d) continue;
+		d.remaining = Math.max(0, (d.remaining || 0) - 1);
+		if (d.remaining === 0) needRefresh = true;
 	  }
-	  queryInput.value = query;
-	  hideSuggestions();
-	  setOutput('Dang xu ly...');
-	  btnLookup.disabled = true;
-	  try {
-		const res = await fetch('/api/getotp', {
-		  method:'POST',
-		  headers:{'Content-Type':'application/json'},
-		  credentials:'same-origin',
-		  body: JSON.stringify({ query })
-		});
-		const d = await res.json();
-		setOutput(d.text || d.error || '(trong)');
-		const parsedAccount = parseAccountFromText(d.text || '');
-		if (parsedAccount) startLiveOtp(parsedAccount);
-		else if (res.ok) startLiveOtp(query);
-		if (d.sessionText) status.textContent = d.sessionText;
-		if (res.status === 401) await checkSession();
-	  } finally {
-		btnLookup.disabled = false;
-	  }
-	}
-
-	function renderSuggestions(items) {
-	  currentSuggestions = items || [];
-	  activeSuggestionIndex = -1;
-	  if (!currentSuggestions.length) {
-		hideSuggestions();
-		return;
-	  }
-	  suggestBox.innerHTML = currentSuggestions.map((item, index) => (
-		`<button type=\"button\" class=\"suggest-item\" data-index=\"${index}\" data-name=\"${item.replace(/\"/g, '&quot;')}\">`
-		+ `<span class=\"suggest-main\"><span class=\"suggest-title\">${item}</span><span class=\"suggest-meta\">click de lookup ngay</span></span>`
-		+ `<span class=\"suggest-live\"><span class=\"suggest-otp\" data-index=\"${index}\">------</span><span class=\"suggest-sec\" data-index=\"${index}\">--</span></span>`
-		+ `</button>`
-	  )).join('');
-	  suggestBox.querySelectorAll('.suggest-item').forEach((node) => {
-		node.addEventListener('click', () => {
-		  const name = node.getAttribute('data-name') || '';
-		  startLiveOtp(name);
-		  lookup(name);
-		});
+	  // update timer SVGs in-place to avoid full re-render
+	  const q = filterText.toLowerCase().trim();
+	  otpList.querySelectorAll('.otp-row').forEach(row => {
+		const name = row.getAttribute('data-name') || '';
+		if (q && !name.toLowerCase().includes(q)) return;
+		const d = otpData[name];
+		if (!d) return;
+		const timerEl = row.querySelector('.otp-timer');
+		if (timerEl) timerEl.innerHTML = timerSvg(d.remaining, d.period);
 	  });
-	  showSuggestions();
-	  activateSuggestion(0);
-	  refreshSuggestionOtps();
-	  if (suggestOtpTimer) clearInterval(suggestOtpTimer);
-	  suggestOtpTimer = setInterval(refreshSuggestionOtps, 1000);
+	  if (needRefresh) batchRefresh();
 	}
 
-	async function fetchSuggestions() {
-	  const q = queryInput.value.trim();
-	  if (!q) {
-		hideSuggestions();
-		return;
-	  }
-	  suggestBox.innerHTML = '<div class=\"suggest-item\"><span class=\"suggest-title\">Dang tim goi y...</span><span class=\"suggest-meta\">realtime</span></div>';
-	  showSuggestions();
+	// ---- Session check ----
+	async function checkSession() {
+	  if (!IS_AUTH) return;
 	  try {
-		const res = await fetch('/api/suggest?q=' + encodeURIComponent(q), { credentials:'same-origin' });
-		if (res.status === 401) {
-		  hideSuggestions();
-		  await checkSession();
-		  return;
-		}
-		const data = await res.json();
-		renderSuggestions(data.items || []);
-	  } catch (e) {
-		hideSuggestions();
-	  }
+		const res = await fetch('/api/session', { credentials: 'same-origin' });
+		const d = await res.json();
+		if (!d.ok || !d.authenticated) { showLogin(); return; }
+		if (d.sessionText) statusBar.textContent = d.sessionText;
+	  } catch(e) {}
 	}
 
-	queryInput.addEventListener('input', () => {
-	  if (suggestTimer) clearTimeout(suggestTimer);
-	  suggestTimer = setTimeout(fetchSuggestions, 90);
+	function showLogin() {
+	  appPage.style.display = 'none';
+	  loginPage.style.display = '';
+	  clearInterval(tickInterval);
+	  clearInterval(refreshInterval);
+	}
+
+	// ---- Search ----
+	searchInput.addEventListener('input', () => {
+	  filterText = searchInput.value;
+	  renderList();
 	});
 
-	queryInput.addEventListener('keydown', (e) => {
-	  if (!currentSuggestions.length) {
-		if (e.key === 'Enter') {
-		  e.preventDefault();
-		  lookup();
-		}
-		return;
-	  }
-	  if (e.key === 'ArrowDown') {
-		e.preventDefault();
-		activateSuggestion((activeSuggestionIndex + 1) % currentSuggestions.length);
-	  } else if (e.key === 'ArrowUp') {
-		e.preventDefault();
-		activateSuggestion(activeSuggestionIndex <= 0 ? currentSuggestions.length - 1 : activeSuggestionIndex - 1);
-	  } else if (e.key === 'Enter') {
-		e.preventDefault();
-		if (activeSuggestionIndex >= 0 && currentSuggestions[activeSuggestionIndex]) {
-		  startLiveOtp(currentSuggestions[activeSuggestionIndex]);
-		  lookup(currentSuggestions[activeSuggestionIndex]);
-		} else {
-		  lookup();
-		}
-	  } else if (e.key === 'Escape') {
-		hideSuggestions();
-	  }
+	// ---- Logout ----
+	document.getElementById('btnLogout').addEventListener('click', async () => {
+	  await fetch('/api/logout', { method: 'POST', credentials: 'same-origin' });
+	  showLogin();
 	});
 
-	document.addEventListener('click', (e) => {
-	  if (!suggestBox.contains(e.target) && e.target !== queryInput) {
-		hideSuggestions();
-	  }
-	});
-
-	loginForm.addEventListener('submit', () => {
-	  setOutput('Dang dang nhap...');
-	});
-	document.getElementById('btnLookup').addEventListener('click', () => lookup());
-	document.getElementById('btnLogout').addEventListener('click', logout);
-	btnCopyLive.addEventListener('click', async () => {
-	  const val = (liveCode.textContent || '').trim();
-	  if (!val || val === '------') return;
-	  try {
-		await navigator.clipboard.writeText(val);
-		liveMeta.textContent = 'Da copy OTP vao clipboard';
-	  } catch (e) {
-		liveMeta.textContent = 'Khong copy duoc. Thu lai';
-	  }
-	});
-	setLiveStateEmpty('Chon goi y ben trai de xem OTP realtime');
-	checkSession();
+	// ---- Boot ----
+	if (IS_AUTH) {
+	  loadAccounts();
+	  tickInterval = setInterval(tick, 1000);
+	  refreshInterval = setInterval(batchRefresh, 25000);
+	  setInterval(checkSession, 60000);
+	}
   </script>
 </body></html>"""
 	return (
 		html_text
-		.replace("__LOGIN_CLASS__", login_class)
-		.replace("__APP_CLASS__", app_class)
+		.replace("__LOGIN_VIS__", login_vis)
+		.replace("__APP_VIS__", app_vis)
+		.replace("__ERR_VIS__", err_vis)
+		.replace("__IS_AUTH__", is_auth_js)
 		.replace("__STATUS_TEXT__", html.escape(status_text, quote=False))
-		.replace("__OUTPUT_TEXT__", html.escape(output_text, quote=False))
 	)
 
 
@@ -1159,6 +884,26 @@ class OTPWebHandler(BaseHTTPRequestHandler):
 				},
 			)
 			return
+		if parsed.path == "/api/accounts":
+			ip = self._client_ip()
+			if not self._is_ip_allowed(ip):
+				self._send_json(403, {"ok": False, "items": [], "error": "ip not allowed"})
+				return
+			session = self._current_session()
+			if WEB_REQUIRE_KEY and not session:
+				self._send_json(401, {"ok": False, "items": [], "error": "unauthorized"})
+				return
+			_maybe_refresh_csv_from_sheet()
+			_, rows = load_csv_rows(CSV_PATH)
+			seen: Set[str] = set()
+			names: list[str] = []
+			for row in (rows or []):
+				acc = (row.get("Account") or "").strip()
+				if acc and acc not in seen:
+					seen.add(acc)
+					names.append(acc)
+			self._send_json(200, {"ok": True, "items": names, "total": len(names)})
+			return
 		if parsed.path == "/api/suggest":
 			ip = self._client_ip()
 			if not self._is_ip_allowed(ip):
@@ -1223,7 +968,7 @@ class OTPWebHandler(BaseHTTPRequestHandler):
 			if not accounts:
 				self._send_json(200, {"ok": True, "items": []})
 				return
-			accounts = accounts[:8]
+			accounts = accounts[:50]
 			_maybe_refresh_csv_from_sheet()
 			items = []
 			for account in accounts:
