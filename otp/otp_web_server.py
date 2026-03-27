@@ -671,11 +671,11 @@ def _html_page() -> str:
 	</section>
 
 	<section class=\"main-card\">
-	  <div id=\"loginBox\" class=\"login-grid\">
-		<div class=\"input-shell\"><input id=\"username\" placeholder=\"Username\" /></div>
-		<div class=\"input-shell\"><input id=\"password\" type=\"password\" placeholder=\"Password\" /></div>
-		<button id=\"btnLogin\" class=\"primary\">Dang nhap</button>
-	  </div>
+	  <form id=\"loginBox\" class=\"login-grid\" method=\"post\" action=\"/login\">
+		<div class=\"input-shell\"><input id=\"username\" name=\"username\" placeholder=\"Username\" /></div>
+		<div class=\"input-shell\"><input id=\"password\" name=\"password\" type=\"password\" placeholder=\"Password\" /></div>
+		<button id=\"btnLogin\" class=\"primary\" type=\"submit\">Dang nhap</button>
+	  </form>
 
 	  <div id=\"appBox\" class=\"toolbar hide\">
 		<div class=\"query-row\">
@@ -728,6 +728,7 @@ def _html_page() -> str:
 	const appBox = document.getElementById('appBox');
 	const status = document.getElementById('status');
 	const out = document.getElementById('out');
+	const loginForm = document.getElementById('loginBox');
 	const queryInput = document.getElementById('query');
 	const suggestBox = document.getElementById('suggestions');
 	const btnLookup = document.getElementById('btnLookup');
@@ -737,6 +738,7 @@ def _html_page() -> str:
 	const liveRing = document.getElementById('liveRing');
 	const liveSec = document.getElementById('liveSec');
 	const btnCopyLive = document.getElementById('btnCopyLive');
+	const pageParams = new URLSearchParams(window.location.search);
 	let suggestTimer = null;
 	let suggestOtpTimer = null;
 	let currentSuggestions = [];
@@ -755,6 +757,14 @@ def _html_page() -> str:
 
 	function setOutput(text) {
 	  out.textContent = text;
+	}
+
+	if (pageParams.get('login_error') === '1') {
+	  status.textContent = 'Dang nhap that bai. Kiem tra lai tai khoan/mat khau.';
+	  setOutput('Dang nhap that bai: invalid credentials');
+	  if (window.history && window.history.replaceState) {
+		window.history.replaceState({}, '', '/');
+	  }
 	}
 
 	function setLiveStateEmpty(msg) {
@@ -897,35 +907,6 @@ def _html_page() -> str:
 	  }
 	}
 
-	async function login() {
-	  const username = document.getElementById('username').value.trim();
-	  const password = document.getElementById('password').value.trim();
-	  const btn = document.getElementById('btnLogin');
-	  if (btn) btn.disabled = true;
-	  setOutput('Dang dang nhap...');
-	  try {
-		const res = await fetch('/api/login', {
-		  method:'POST',
-		  headers:{'Content-Type':'application/json'},
-		  credentials:'same-origin',
-		  body: JSON.stringify({ username, password })
-		});
-		const d = await readJsonSafe(res);
-		if (res.ok && d.ok) {
-		  setOutput('Dang nhap thanh cong.');
-		} else {
-		  const err = d.error || ('HTTP ' + res.status);
-		  setOutput('Dang nhap that bai: ' + err);
-		}
-		await checkSession();
-	  } catch (e) {
-		setOutput('Dang nhap that bai: loi ket noi server');
-		status.textContent = 'Khong ket noi duoc server /api/login';
-	  } finally {
-		if (btn) btn.disabled = false;
-	  }
-	}
-
 	async function logout() {
 	  await fetch('/api/logout', { method:'POST', credentials:'same-origin' });
 	  hideSuggestions();
@@ -1052,7 +1033,9 @@ def _html_page() -> str:
 	  }
 	});
 
-	document.getElementById('btnLogin').addEventListener('click', login);
+	loginForm.addEventListener('submit', () => {
+	  setOutput('Dang dang nhap...');
+	});
 	document.getElementById('btnLookup').addEventListener('click', () => lookup());
 	document.getElementById('btnLogout').addEventListener('click', logout);
 	btnCopyLive.addEventListener('click', async () => {
@@ -1065,8 +1048,6 @@ def _html_page() -> str:
 		liveMeta.textContent = 'Khong copy duoc. Thu lai';
 	  }
 	});
-	document.getElementById('username').addEventListener('keydown', (e) => { if (e.key === 'Enter') login(); });
-	document.getElementById('password').addEventListener('keydown', (e) => { if (e.key === 'Enter') login(); });
 	setLiveStateEmpty('Chon goi y ben trai de xem OTP realtime');
 	checkSession();
   </script>
@@ -1121,6 +1102,22 @@ class OTPWebHandler(BaseHTTPRequestHandler):
 		except Exception:
 			return None, "invalid json"
 
+	def _login_ok(self, username: str, password: str, api_key: str) -> Tuple[bool, str]:
+		login_user = username
+		if WEB_USERS:
+			expected = WEB_USERS.get(username)
+			ok = bool(expected and hmac.compare_digest(password, expected))
+			if (not ok) and WEB_API_KEY and password:
+				ok = hmac.compare_digest(password, WEB_API_KEY)
+				if ok and not login_user:
+					login_user = "api-key-user"
+			return ok, login_user
+		provided_key = api_key or password
+		ok = WEB_REQUIRE_KEY and bool(WEB_API_KEY and provided_key and hmac.compare_digest(provided_key, WEB_API_KEY))
+		if ok and not login_user:
+			login_user = "api-key-user"
+		return ok, login_user
+
 	def _send_json(self, code: int, payload: Dict[str, Any]) -> None:
 		data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
 		self.send_response(code)
@@ -1147,6 +1144,11 @@ class OTPWebHandler(BaseHTTPRequestHandler):
 		parsed = urlparse(self.path)
 		if parsed.path in {"/", "/index.html"}:
 			self._send_html(_html_page())
+			return
+		if parsed.path == "/favicon.ico":
+			self.send_response(204)
+			self.send_header("Content-Length", "0")
+			self.end_headers()
 			return
 		if parsed.path == "/health":
 			self._send_json(200, {"ok": True, "service": "otp-web", "ts": _now_ts()})
@@ -1269,6 +1271,17 @@ class OTPWebHandler(BaseHTTPRequestHandler):
 			return
 		self._send_json(404, {"ok": False, "error": "not found"})
 
+	def do_HEAD(self) -> None:
+		parsed = urlparse(self.path)
+		if parsed.path in {"/", "/index.html", "/health", "/favicon.ico"}:
+			self.send_response(200)
+			self.send_header("Content-Length", "0")
+			self.end_headers()
+			return
+		self.send_response(404)
+		self.send_header("Content-Length", "0")
+		self.end_headers()
+
 	def do_POST(self) -> None:
 		parsed = urlparse(self.path)
 		ip = self._client_ip()
@@ -1280,6 +1293,29 @@ class OTPWebHandler(BaseHTTPRequestHandler):
 			self._send_json(403, {"ok": False, "error": "outside allowed time"})
 			return
 
+		if parsed.path == "/login":
+			n = int(self.headers.get("Content-Length", "0") or "0")
+			raw = self.rfile.read(n) if n > 0 else b""
+			form = parse_qs(raw.decode("utf-8", errors="ignore"))
+			username = (form.get("username") or [""])[0].strip()
+			password = (form.get("password") or [""])[0].strip()
+			ok, login_user = self._login_ok(username, password, "")
+			if not ok:
+				_write_audit_line({"ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "type": "login", "client": ip, "username": username, "ok": False})
+				self.send_response(303)
+				self.send_header("Location", "/?login_error=1")
+				self.send_header("Content-Length", "0")
+				self.end_headers()
+				return
+			cookie_val = _create_session(ip, login_user)
+			self.send_response(303)
+			self._set_cookie(SESSION_COOKIE_NAME, cookie_val, WEB_SESSION_TTL_SECONDS)
+			self.send_header("Location", "/")
+			self.send_header("Content-Length", "0")
+			self.end_headers()
+			_write_audit_line({"ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "type": "login", "client": ip, "username": login_user, "ok": True})
+			return
+
 		if parsed.path == "/api/login":
 			payload, err = self._read_json_body()
 			if err:
@@ -1288,23 +1324,7 @@ class OTPWebHandler(BaseHTTPRequestHandler):
 			username = str((payload or {}).get("username", "")).strip()
 			password = str((payload or {}).get("password", "")).strip()
 			api_key = str((payload or {}).get("apiKey", "")).strip()
-
-			login_ok = False
-			login_user = username
-
-			if WEB_USERS:
-				expected = WEB_USERS.get(username)
-				login_ok = bool(expected and hmac.compare_digest(password, expected))
-				if (not login_ok) and WEB_API_KEY and password:
-					# Fallback for emergency access when user env is misconfigured.
-					login_ok = hmac.compare_digest(password, WEB_API_KEY)
-					if login_ok and not login_user:
-						login_user = "api-key-user"
-			else:
-				provided_key = api_key or password
-				login_ok = WEB_REQUIRE_KEY and bool(WEB_API_KEY and provided_key and hmac.compare_digest(provided_key, WEB_API_KEY))
-				if login_ok and not login_user:
-					login_user = "api-key-user"
+			login_ok, login_user = self._login_ok(username, password, api_key)
 
 			if not login_ok:
 				self._send_json(401, {"ok": False, "error": "invalid credentials"})
