@@ -695,31 +695,38 @@ def _html_page(authenticated: bool = False, session_text: str = "Dang kiem tra p
 	async function batchRefresh() {
 	  if (!allAccounts.length) return;
 	  // Chia toàn bộ account thành nhiều batch 50, gọi song song
-	  const batchSize = 50;
-	  const batches = [];
-	  for (let i = 0; i < allAccounts.length; i += batchSize) {
+	const batchSize = 50;
+	const batches = [];
+	for (let i = 0; i < allAccounts.length; i += batchSize) {
 		batches.push(allAccounts.slice(i, i + batchSize));
-	  }
-	  try {
-		const results = await Promise.all(batches.map(async (chunk) => {
-		  const params = new URLSearchParams();
-		  for (const a of chunk) params.append('account', a);
-		  const res = await fetch('/api/otp-live-batch?' + params.toString(), { credentials: 'same-origin' });
-		  if (res.status === 401) { showLogin(); return null; }
-		  const d = await res.json();
-		  if (d.ok && Array.isArray(d.items)) {
-			return d.items.map((item, i) => ({ name: chunk[i], ...item }));
-		  }
-		  return [];
-		}));
-		// Ghép kết quả lại
-		results.flat().forEach((item) => {
-		  if (item && item.ok) {
-			otpData[item.name] = { code: item.code, remaining: item.remaining, period: item.period || 30 };
-		  }
-		});
+	}
+	try {
+		for (let batchIdx = 0; batchIdx < batches.length; ++batchIdx) {
+			const chunk = batches[batchIdx];
+			const params = new URLSearchParams();
+			for (const a of chunk) params.append('account', a);
+			const res = await fetch('/api/otp-live-batch?' + params.toString(), { credentials: 'same-origin' });
+			if (res.status === 401) { showLogin(); return; }
+			if (!res.ok) {
+				console.error('Batch', batchIdx, 'request failed:', res.status);
+				continue;
+			}
+			const d = await res.json();
+			if (d.ok && Array.isArray(d.items)) {
+				d.items.forEach((item, i) => {
+					if (item && item.ok) {
+						// mapping account tuyệt đối
+						otpData[item.account] = { code: item.code, remaining: item.remaining, period: item.period || 30 };
+					} else if (item && item.account) {
+						otpData[item.account] = { code: '------', remaining: 30, period: 30 };
+					}
+				});
+			} else {
+				console.error('Batch', batchIdx, 'response error:', d);
+			}
+		}
 		renderList();
-	  } catch(e) {}
+	} catch(e) { console.error('Batch error:', e); }
 	}
 
 	// tick countdown every second
